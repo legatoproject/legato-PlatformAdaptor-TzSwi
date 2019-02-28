@@ -1,0 +1,17 @@
+requires:
+{
+    component:
+    {
+        ${LEGATO_ROOT}/platformAdaptor/trustZone/swi/components/le_pa_tz
+    }
+}
+
+sources:
+{
+    trustZoneTest.c
+}
+
+cflags:
+{
+    -I${LEGATO_ROOT}/platformAdaptor/trustZone/swi/components/le_pa_tz
+}

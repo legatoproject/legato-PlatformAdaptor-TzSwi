@@ -1,0 +1,12 @@
+requires:
+{
+    device:
+    {
+        [rw] /dev/tzdev    /dev/tzdev
+    }
+}
+
+sources:
+{
+    trustZone.c
+}

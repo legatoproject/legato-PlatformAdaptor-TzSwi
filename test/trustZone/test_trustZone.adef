@@ -1,0 +1,20 @@
+executables:
+{
+    testTrustZone = ( tzTestComponent )
+}
+
+processes:
+{
+    run:
+    {
+        ( testTrustZone )
+    }
+}
+
+bundles:
+{
+    file:
+    {
+        [r] LongPlainText    /usr/
+    }
+}

@@ -1,0 +1,36 @@
+sources:
+{
+    pa_secStoreTz.c
+}
+
+cflags:
+{
+    -I${LEGATO_ROOT}/platformAdaptor/trustZone/swi/components/le_pa_tz
+    -I${LEGATO_ROOT}/components/secStore/platformAdaptor/inc
+    -I${LEGATO_ROOT}/framework/liblegato
+    -I${LEGATO_SYSROOT}/usr/lib
+}
+
+requires:
+{
+    api:
+    {
+        le_cfg.api
+        secureStorage/secStoreAdmin.api       [types-only]
+    }
+
+    component:
+    {
+        ${LEGATO_ROOT}/platformAdaptor/trustZone/swi/components/le_pa_tz
+    }
+}
+
+bundles:
+{
+    file:
+    {
+        // Include an empty keys file to keep the content persistent upon app upgrade.
+        // The keys file will be protected in the apps working directory by smack.
+        [rw] keys   /
+    }
+}
