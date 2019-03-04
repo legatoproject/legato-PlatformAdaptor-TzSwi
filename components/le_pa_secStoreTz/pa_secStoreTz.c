@@ -14,7 +14,7 @@
  * There are three secure storage path use cases managed:
  * | Path type                  | Details                                                        |
  * |----------------------------|----------------------------------------------------------------|
- * | AVMS Bootstrap Keys        | The AVMS keys are provisioned in modem SFS. Therefore we will  |
+ * | AVMS Keys                  | The AVMS keys are provisioned in modem SFS. Therefore we will  |
  * |                            | need to rely on QMI to access SFS in this specific case.       |
  * |                            |                                                                |
  * | Application keys           | A new key for each unique application.                         |
@@ -190,6 +190,10 @@ SfsPath_t;
 //--------------------------------------------------------------------------------------------------
 static SfsPath_t SfsPaths[] = {
     { "/sys/*/apps/avcService/avms/LWM2M_BOOTSTRAP*", SFS_PATH_TYPE_AVMS_PATH },
+    { "/sys/*/apps/avcService/avms/LWM2M_FW_KEY", SFS_PATH_TYPE_AVMS_PATH },
+    { "/sys/*/apps/avcService/avms/LWM2M_SW_KEY", SFS_PATH_TYPE_AVMS_PATH },
+    { "/sys/*/apps/avcService/avms/certificate", SFS_PATH_TYPE_AVMS_PATH },
+    { "/sys/*/apps/avcService/avms/bs_server_public_key", SFS_PATH_TYPE_AVMS_PATH },
     { "/sys/*/apps/*", SFS_PATH_TYPE_APP_PATH }
 };
 
