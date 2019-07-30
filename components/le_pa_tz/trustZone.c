@@ -242,11 +242,6 @@ le_result_t tz_EncryptData
 
     LE_DEBUG("Encrypting text [%s], size [%d]", (char *) plainData, plainDataSize);
 
-    if (plainDataSize > *encryptedDataSizePtr)
-    {
-        return LE_OVERFLOW;
-    }
-
     size_t bytesProcessed = 0;
     size_t bytesEncrypted = 0;
     do
@@ -319,11 +314,6 @@ le_result_t tz_DecryptData
     {
         LE_ERROR("Invalid key");
         return LE_FAULT;
-    }
-
-    if (encryptedDataSize > *decryptedDataSizePtr)
-    {
-        return LE_OVERFLOW;
     }
 
     size_t bytesProcessed = 0;
