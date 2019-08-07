@@ -215,7 +215,9 @@ void tz_TC6()
     uint32_t smallEncryptedDataSize = sizeof(smallEncryptedData);
 
     le_result_t result = tz_EncryptData(Key, KeySize, plainData, plainDataSize, smallEncryptedData, &smallEncryptedDataSize);
-    LE_TEST_ASSERT(result == LE_OVERFLOW, "Encrypting text into small buffer.");
+    LE_TEST_INFO("Encrypting %d bytes into %d bytes buffer: result %s", plainDataSize, smallEncryptedDataSize,
+                 LE_RESULT_TXT(result));
+    LE_TEST_ASSERT(result == LE_FAULT, "Encrypting text into small buffer.");
 
     uint8_t encryptedData[1024];
     uint32_t encryptedDataSize = sizeof(encryptedData);
@@ -227,9 +229,80 @@ void tz_TC6()
     uint8_t smallDecryptedData[plainDataSize-1];
     uint32_t smallDecryptedDataSize = sizeof(smallDecryptedData);
     result = tz_DecryptData(Key, KeySize, encryptedData, encryptedDataSize, smallDecryptedData, &smallDecryptedDataSize);
-    LE_TEST_ASSERT(result == LE_OVERFLOW, "Decrypting text into small buffer.");
+    LE_TEST_ASSERT(result == LE_FAULT, "Decrypting text into small buffer.");
 }
 
+void tz_TC7()
+{
+    LE_TEST_INFO("== Edge case: data slightly exceeds max buffer ==");
+
+    // Encrypting text
+    uint8_t plainData[2050] = {0};
+    uint32_t plainDataSize = sizeof(plainData);
+    int i;
+    for (i = 0; i < plainDataSize; i++)
+    {
+        plainData[i] = i % 10;
+    }
+    uint8_t encryptedData[2200];
+    uint32_t encryptedDataSize = sizeof(encryptedData);
+    uint8_t decryptedData[2050];
+    uint32_t decryptedDataSize = sizeof(decryptedData);
+
+    le_result_t result = tz_EncryptData(Key, KeySize, plainData, plainDataSize, encryptedData, &encryptedDataSize);
+    LE_TEST_ASSERT(result == LE_OK, "Encrypting data.");
+    LE_TEST_INFO("Encrypted to %d bytes, result %s", encryptedDataSize, LE_RESULT_TXT(result));
+
+    // Decrypt text
+    result = tz_DecryptData(Key, KeySize, encryptedData, encryptedDataSize, decryptedData, &decryptedDataSize);
+    LE_TEST_INFO("Decrypted to %d bytes, result %s", decryptedDataSize, LE_RESULT_TXT(result));
+    LE_TEST_ASSERT(result == LE_OK, "Decrypting text.");
+
+    // Compare
+    for (i = 0; i < sizeof(plainData); i++)
+    {
+        if (plainData[i] != decryptedData[i])
+        {
+            LE_TEST_FATAL("Data at position %d is not the same.", i);
+        }
+    }
+}
+
+void tz_TC8()
+{
+    LE_TEST_INFO("== Edge case: data size slightly less than max buffer ==");
+
+    // Encrypting text
+    uint8_t plainData[2030] = {0};
+    uint32_t plainDataSize = sizeof(plainData);
+    int i;
+    for (i = 0; i < plainDataSize; i++)
+    {
+        plainData[i] = i % 10;
+    }
+    uint8_t encryptedData[2100];
+    uint32_t encryptedDataSize = sizeof(encryptedData);
+    uint8_t decryptedData[2030];
+    uint32_t decryptedDataSize = sizeof(decryptedData);
+
+    le_result_t result = tz_EncryptData(Key, KeySize, plainData, plainDataSize, encryptedData, &encryptedDataSize);
+    LE_TEST_ASSERT(result == LE_OK, "Encrypting data.");
+    LE_TEST_INFO("Encrypted to %d bytes, result %s", encryptedDataSize, LE_RESULT_TXT(result));
+
+    // Decrypt text
+    result = tz_DecryptData(Key, KeySize, encryptedData, encryptedDataSize, decryptedData, &decryptedDataSize);
+    LE_TEST_INFO("Decrypted to %d bytes, result %s", decryptedDataSize, LE_RESULT_TXT(result));
+    LE_TEST_ASSERT(result == LE_OK, "Decrypting data.");
+
+    // Compare
+    for (i = 0; i < sizeof(plainData); i++)
+    {
+        if (plainData[i] != decryptedData[i])
+        {
+            LE_TEST_FATAL("Data at position %d is not the same.", i);
+        }
+    }
+}
 
 COMPONENT_INIT
 {
@@ -239,5 +312,7 @@ COMPONENT_INIT
     tz_TC4();
     tz_TC5();
     tz_TC6();
+    tz_TC7();
+    tz_TC8();
     LE_TEST_EXIT;
 }

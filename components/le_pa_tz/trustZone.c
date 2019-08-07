@@ -27,26 +27,10 @@
 
 //--------------------------------------------------------------------------------------------------
 /**
- * Maximum size of data before we start chunking them into 4k blocks.
+ * Maximum size of data before we start chunking them into blocks.
  */
 //--------------------------------------------------------------------------------------------------
-#define MAX_DATA_SIZE               4096
-
-//--------------------------------------------------------------------------------------------------
-/**
- * Maximum encrypted buffer required to store MAX_DATA_SIZE when encrypted.
- * The size is deterministic and does not matter on the content of the 4k buffer.
- * This is calculated by encrypted any buffer of 4K and checking how many bytes tz uses.
- */
-//--------------------------------------------------------------------------------------------------
-static int MaxEncryptedSize = 0;
-
-//--------------------------------------------------------------------------------------------------
-/**
- * Flag to initialize trustZone. Calculate the MaxEncryptedSize only once.
- */
-//--------------------------------------------------------------------------------------------------
-static bool InitTz = false;
+#define MAX_DATA_SIZE               2048
 
 //--------------------------------------------------------------------------------------------------
 /**
@@ -184,34 +168,48 @@ le_result_t tz_GenerateKey
 
 /**-----------------------------------------------------------------------------------------------
  *
- * Used to determine exactly how many encrypted bytes are required to decrypt a specific plain text.
+ * Used to determine exactly how many encrypted bytes are produced from plaintext of MAX_DATA_SIZE.
  *
  * @return
- *      - LE_OK
- *      - LE_FAULT
+ *      - Size of the encrypted buffer produced from MAX_DATA_SIZE plaintext
+ *      - 0 on failure
  */
 //--------------------------------------------------------------------------------------------------
-static le_result_t GetEncryptedSize
+static uint32_t GetMaxEncryptedSize
 (
     uint8_t* keyPtr,                    ///< [IN] Key.
-    uint32_t keySize,                   ///< [IN] Size of key.
-    uint8_t* plainData,                 ///< [IN] Plain text.
-    uint32_t plainDataSize              ///< [IN] Size of plain text.
+    uint32_t keySize                    ///< [IN] Size of key.
 )
 {
-    int overhead = 128; // Use an arbritrary size
-    uint8_t buf[MAX_DATA_SIZE + overhead];
-    uint32_t bufSize = sizeof(buf);
+    uint8_t             plainData[MAX_DATA_SIZE] = {0};
+    uint32_t            plainDataSize = MAX_DATA_SIZE;
+    int                 overhead = 128; // Arbritrary size known to be greater than actual overhead
+    uint8_t             buf[MAX_DATA_SIZE + overhead];
+    uint32_t            bufSize = sizeof(buf);
+    /*
+     * Maximum encrypted buffer required to store MAX_DATA_SIZE when encrypted.
+     * The size is deterministic and does not matter on the content of the buffer.
+     * This is calculated by encrypting any buffer of MAX_DATA_SIZE and checking how many bytes
+     * tz uses. Zero means it's not calculated yet.
+     */
+    static uint32_t     maxEncryptedSize = 0;
 
-    if (!SendTzRequest(TZDEV_IOCTL_SEAL_REQ, keyPtr, &keySize,
-        plainData, &plainDataSize, buf, &bufSize))
+    // Dry-run encryption operation, performed only once.
+    if (0 == maxEncryptedSize)
     {
-        LE_ERROR("Error encrypting string.");
-        return LE_FAULT;
+        if (!SendTzRequest(TZDEV_IOCTL_SEAL_REQ, keyPtr, &keySize,
+            plainData, &plainDataSize, buf, &bufSize))
+        {
+            LE_ERROR("Error encrypting max buffer.");
+        }
+        else
+        {
+            maxEncryptedSize = bufSize;
+            LE_INFO("Calculated maxEncryptedSize = %d", maxEncryptedSize);
+        }
     }
 
-    MaxEncryptedSize = bufSize;
-    return LE_OK;
+    return maxEncryptedSize;
 }
 
 
@@ -240,8 +238,14 @@ le_result_t tz_EncryptData
         return LE_FAULT;
     }
 
-    LE_DEBUG("Encrypting text [%s], size [%d]", (char *) plainData, plainDataSize);
+    uint32_t maxEncryptedSize = GetMaxEncryptedSize(keyPtr, keySize);
+    if (0 == maxEncryptedSize)
+    {
+        LE_ERROR("Error calculating max encrypted size");
+        return LE_FAULT;
+    }
 
+    LE_DEBUG("Encrypting data, size [%d]", plainDataSize);
     size_t bytesProcessed = 0;
     size_t bytesEncrypted = 0;
     do
@@ -255,17 +259,10 @@ le_result_t tz_EncryptData
 
         size_t eDataSize = *encryptedDataSizePtr - bytesEncrypted;
 
-        if (eDataSize > MAX_DATA_SIZE)
+        if (eDataSize > maxEncryptedSize)
         {
-            if (!InitTz)
-            {
-                if (GetEncryptedSize(keyPtr, keySize, plainData, MAX_DATA_SIZE) == LE_OK)
-                {
-                    InitTz = true;
-                }
-            }
 
-            eDataSize = MaxEncryptedSize;
+            eDataSize = maxEncryptedSize;
         }
 
         if (!SendTzRequest(TZDEV_IOCTL_SEAL_REQ, keyPtr, &keySize,
@@ -316,23 +313,23 @@ le_result_t tz_DecryptData
         return LE_FAULT;
     }
 
+    uint32_t maxEncryptedSize = GetMaxEncryptedSize(keyPtr, keySize);
+    if (0 == maxEncryptedSize)
+    {
+        LE_ERROR("Error calculating max encrypted size");
+        return LE_FAULT;
+    }
+
     size_t bytesProcessed = 0;
     size_t bytesDecrypted = 0;
     do
     {
         size_t eDataSize = encryptedDataSize - bytesProcessed;
 
-        if (eDataSize > MAX_DATA_SIZE)
+        if (eDataSize > maxEncryptedSize)
         {
-            if (!InitTz)
-            {
-                if (GetEncryptedSize(keyPtr, keySize, encryptedData, MAX_DATA_SIZE) == LE_OK)
-                {
-                    InitTz = true;
-                }
-            }
 
-            eDataSize = MaxEncryptedSize;
+            eDataSize = maxEncryptedSize;
         }
 
         size_t dDataSize = *decryptedDataSizePtr - bytesDecrypted;
