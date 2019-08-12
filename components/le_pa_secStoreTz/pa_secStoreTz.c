@@ -99,6 +99,15 @@
 
 //--------------------------------------------------------------------------------------------------
 /**
+ * Total available space of the secure storage, in bytes.
+ * It's not enforced, but needed to return some number from GetTotalSpace() API.
+ */
+//--------------------------------------------------------------------------------------------------
+#define SECSTORE_TOTAL_SPACE        (1024 * 1024)
+
+
+//--------------------------------------------------------------------------------------------------
+/**
  * Flag to indicate if the sfs is ready for user access.
  */
 //--------------------------------------------------------------------------------------------------
@@ -1709,7 +1718,29 @@ le_result_t pa_secStore_GetTotalSpace
     size_t* freeSizePtr                     ///< [OUT] Free space, in bytes, in secure storage.
 )
 {
-    return LE_UNSUPPORTED;
+    size_t usedSize = 0;
+
+    le_result_t result = GetSize("", &usedSize);
+    if (LE_NOT_FOUND == result)
+    {
+        return LE_UNAVAILABLE;
+    }
+    else if (LE_OK != result)
+    {
+        return result;
+    }
+
+    *totalSpacePtr = SECSTORE_TOTAL_SPACE;
+    if (*totalSpacePtr > usedSize)
+    {
+        *freeSizePtr = *totalSpacePtr - usedSize;
+    }
+    else
+    {
+        *freeSizePtr = 0;
+    }
+
+    return LE_OK;
 }
 
 
