@@ -521,54 +521,6 @@ handleReadError:
 
 //--------------------------------------------------------------------------------------------------
 /**
- * Writes the data in the buffer to the specified path in modem secure storage replacing any
- * previously written data at the same path.
- *
- * @return
- *      LE_OK if successful.
- *      LE_NO_MEMORY if there is not enough memory to store the data.
- *      LE_UNAVAILABLE if the secure storage is currently unavailable.
- *      LE_BAD_PARAMETER if the path cannot be written to because it is a directory or it would
- *                       result in an invalid path.
- *      LE_FAULT if there was some other error.
- */
-//--------------------------------------------------------------------------------------------------
-static le_result_t ModemWrite
-(
-    const char* pathPtr,            ///< [IN] Path to write to.
-    const uint8_t* bufPtr,          ///< [IN] Buffer containing the data to write.
-    size_t bufSize                  ///< [IN] Size of the buffer.
-)
-{
-    LE_DEBUG("Writing to modem secure storage [%s]", pathPtr);
-
-    if (ModemSecStorePASoPtr == NULL)
-    {
-        ModemSecStorePASoPtr = dlopen(ModemSecStorePAPath, RTLD_LAZY);
-
-        if (NULL == ModemSecStorePASoPtr)
-        {
-            LE_ERROR("Could not open %s.", ModemSecStorePAPath);
-            LE_ERROR("%s", dlerror());
-            return LE_FAULT;
-        }
-    }
-
-    static int (*pa_secStore_Write)(const char*, const uint8_t*, size_t) = NULL;
-    pa_secStore_Write = dlsym(ModemSecStorePASoPtr, "pa_secStore_Write");
-    if (!pa_secStore_Write)
-    {
-        LE_WARN("Could not get function pa_secStore_Write.");
-        LE_ERROR("%s", dlerror());
-        return LE_FAULT;
-    }
-
-    return pa_secStore_Write(pathPtr, bufPtr, bufSize);
-}
-
-
-//--------------------------------------------------------------------------------------------------
-/**
  * Generates or uses an existing key to encrypt buffered data. The path and encrypted data is then
  * stored into the configTree.
  *
@@ -795,51 +747,6 @@ le_result_t Read
 
 //--------------------------------------------------------------------------------------------------
 /**
- * Deletes the specified path and everything under it in modem secure storage.
- *
- * @return
- *      LE_OK if successful.
- *      LE_NOT_FOUND if the path does not exist.
- *      LE_UNAVAILABLE if the secure storage is currently unavailable.
- *      LE_FAULT if there was an error.
- */
-//--------------------------------------------------------------------------------------------------
-static le_result_t ModemDelete
-(
-    const char* pathPtr             ///< [IN] Path to delete.
-)
-{
-    LE_DEBUG("Deleting from modem secure storage [%s]", pathPtr);
-
-    // never loaded
-    if (ModemSecStorePASoPtr == NULL)
-    {
-        ModemSecStorePASoPtr = dlopen(ModemSecStorePAPath, RTLD_LAZY);
-
-        // try loading
-        if (NULL == ModemSecStorePASoPtr)
-        {
-            LE_ERROR("Could not open %s.", ModemSecStorePAPath);
-            LE_ERROR("%s", dlerror());
-            return LE_FAULT;
-        }
-    }
-
-    static int (*pa_secStore_Delete)(const char*) = NULL;
-    pa_secStore_Delete = dlsym(ModemSecStorePASoPtr, "pa_secStore_Delete");
-    if (!pa_secStore_Delete)
-    {
-        LE_WARN("Could not get function pa_secStore_Delete.");
-        LE_ERROR("%s", dlerror());
-        return LE_FAULT;
-    }
-
-    return pa_secStore_Delete(pathPtr);
-}
-
-
-//--------------------------------------------------------------------------------------------------
-/**
  * Deletes the path entry from the configTree.
  *
  * @return
@@ -869,53 +776,6 @@ le_result_t Delete
     }
 
     return result;
-}
-
-
-//--------------------------------------------------------------------------------------------------
-/**
- * Gets the size, in bytes, of the data at the specified path and everything under it in modem
- * secure storage.
- *
- * @return
- *      LE_OK if successful.
- *      LE_NOT_FOUND if the path does not exist.
- *      LE_UNAVAILABLE if the secure storage is currently unavailable.
- *      LE_FAULT if there was an error.
- */
-//--------------------------------------------------------------------------------------------------
-static le_result_t ModemGetSize
-(
-    const char* pathPtr,            ///< [IN] Path.
-    size_t* sizePtr                 ///< [OUT] Size in bytes of all items in the path.
-)
-{
-    LE_DEBUG("Get size from modem secure storage [%s]", pathPtr);
-
-    // never loaded
-    if (ModemSecStorePASoPtr == NULL)
-    {
-        ModemSecStorePASoPtr = dlopen(ModemSecStorePAPath, RTLD_LAZY);
-
-        // try loading
-        if (NULL == ModemSecStorePASoPtr)
-        {
-            LE_ERROR("Could not open %s.", ModemSecStorePAPath);
-            LE_ERROR("%s", dlerror());
-            return LE_FAULT;
-        }
-    }
-
-    static int (*pa_secStore_GetSize)(const char*, size_t*) = NULL;
-    pa_secStore_GetSize = dlsym(ModemSecStorePASoPtr, "pa_secStore_GetSize");
-    if (!pa_secStore_GetSize)
-    {
-        LE_WARN("Could not get function pa_secStore_GetSize.");
-        LE_ERROR("%s", dlerror());
-        return LE_FAULT;
-    }
-
-    return pa_secStore_GetSize(pathPtr, sizePtr);
 }
 
 
@@ -1000,7 +860,8 @@ static le_result_t IteratePathSize
                     // Identify key name for this path
                     char keyName[LIMIT_MAX_APP_NAME_BYTES];
                     SfsPathType_t type = GetPathType(path);
-                    if (type == SFS_PATH_TYPE_APP_PATH)
+                    if ((type == SFS_PATH_TYPE_AVMS_PATH) ||
+                        (type == SFS_PATH_TYPE_APP_PATH))
                     {
                         result = GetApplicationName(path, keyName, sizeof(keyName));
 
@@ -1412,11 +1273,8 @@ le_result_t pa_secStore_Write
     SfsPathType_t type = GetPathType(pathPtr);
 
     // Access the modem for AVMS use cases
-    if (type == SFS_PATH_TYPE_AVMS_PATH)
-    {
-        return ModemWrite(pathPtr, bufPtr, bufSize);
-    }
-    else if (type == SFS_PATH_TYPE_APP_PATH)
+    if ((type == SFS_PATH_TYPE_AVMS_PATH) ||
+        (type == SFS_PATH_TYPE_APP_PATH))
     {
         result = GetApplicationName(pathPtr, appName, sizeof(appName));
 
@@ -1467,10 +1325,34 @@ le_result_t pa_secStore_Read
     char appName[LIMIT_MAX_APP_NAME_BYTES];
     SfsPathType_t type = GetPathType(pathPtr);
 
-    // Access the modem for AVMS use cases
+    // In the case where the path is avms, we will try reading from trustzone first.
+    // If it does not exist, we will copy it from the modem sfs.
     if (type == SFS_PATH_TYPE_AVMS_PATH)
     {
-        return ModemRead(pathPtr, bufPtr, bufSizePtr);
+        result = GetApplicationName(pathPtr, appName, sizeof(appName));
+
+        if (result != LE_OK)
+        {
+            return result;
+        }
+
+        result = Read(appName, pathPtr, bufPtr, bufSizePtr);
+
+        if (result == LE_OK)
+        {
+            return result;
+        }
+        else
+        {
+            result = ModemRead(pathPtr, bufPtr, bufSizePtr);
+
+            if (result != LE_OK)
+            {
+                return result;
+            }
+
+            return Write(appName, pathPtr, bufPtr, *bufSizePtr, false, NULL);
+        }
     }
     else if (type == SFS_PATH_TYPE_APP_PATH)
     {
@@ -1557,14 +1439,6 @@ le_result_t pa_secStore_Delete
         return result;
     }
 
-    SfsPathType_t type = GetPathType(pathPtr);
-
-    // Access the modem for AVMS use cases
-    if (type == SFS_PATH_TYPE_AVMS_PATH)
-    {
-        return ModemDelete(pathPtr);
-    }
-
     return Delete(pathPtr);
 }
 
@@ -1591,14 +1465,6 @@ le_result_t pa_secStore_GetSize
     if (result != LE_OK)
     {
         return result;
-    }
-
-    SfsPathType_t type = GetPathType(pathPtr);
-
-    // Access the modem for AVMS use cases
-    if (type == SFS_PATH_TYPE_AVMS_PATH)
-    {
-        return ModemGetSize(pathPtr, sizePtr);
     }
 
     return GetSize(pathPtr, sizePtr);
