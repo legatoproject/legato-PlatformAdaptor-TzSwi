@@ -1031,10 +1031,14 @@ static le_result_t IteratePathSize
                                             encryptedDataSize,
                                             buffer,
                                             &bufferSize);
+                    // If the data can't be decrypted (due to lost key file as a result of Legato
+                    // downgrade), use the encrypted size in calculations and return OK.
+                    // This will allow Write() operation to succeed and overwrite the bad data.
                     if (result != LE_OK)
                     {
-                        LE_ERROR("Unable to decrypt [%s].", path);
-                        return LE_FAULT;
+                        LE_WARN("Unable to decrypt [%s].", path);
+                        bufferSize = encryptedDataSize;
+                        result = LE_OK;
                     }
                 }
 
