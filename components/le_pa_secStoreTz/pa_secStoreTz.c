@@ -921,8 +921,8 @@ static le_result_t ModemGetSize
 
 //--------------------------------------------------------------------------------------------------
 /**
- * Recursively go through all the paths under the specified iterator and return the total size
- * used to store data.
+ * Recursively go through all the paths under the specified iterator, to calculate the total size
+ * used to store data, and collect the meta data.
  *
  * @return
  *      LE_OK if successful.
@@ -936,8 +936,9 @@ static le_result_t IteratePathSize
     le_cfg_IteratorRef_t iteratorRef, ///< [IN] Iterate through all paths under this iterator.
     size_t isRoot,                    ///< [IN] Used to mark the current iterator as root
                                       ///       so we don't iterate the roots node siblings.
-    size_t* totalSizePtr              ///< [IN/OUT] Total size of all data under the specified
-                                      ///           iterator.
+    size_t* totalSizePtr,             ///< [IN/OUT] Total size of all data under the specified
+                                      ///           iterator. Ignored if NULL.
+    FILE* metaFilePtr                 ///< [IN/OUT] File to write meta data to. Ignored if NULL.
 )
 {
     le_result_t result = LE_OK;
@@ -952,7 +953,7 @@ static le_result_t IteratePathSize
             // A stem node, recruse into the stem's sub-items.
             case LE_CFG_TYPE_STEM:
                 le_cfg_GoToFirstChild(iteratorRef);
-                result = IteratePathSize(iteratorRef, false, totalSizePtr);
+                result = IteratePathSize(iteratorRef, false, totalSizePtr, metaFilePtr);
                 if (result != LE_OK)
                 {
                     return result;
@@ -1038,7 +1039,16 @@ static le_result_t IteratePathSize
                 }
 
                 LE_DEBUG("Path: %s [size: %d]", path, bufferSize);
-                *totalSizePtr += bufferSize;
+                if (NULL != metaFilePtr)
+                {
+                    // meta data written in the way partially compatible with old "meta file":
+                    // lines 1,3,5,.. contain path, lines 2,4,6,.. contain item size.
+                    fprintf(metaFilePtr, "%s\n%d\n", path, bufferSize);
+                }
+                if (NULL != totalSizePtr)
+                {
+                    *totalSizePtr += bufferSize;
+                }
 
                 if (isRoot)
                 {
@@ -1083,7 +1093,7 @@ static le_result_t GetSize
     }
     else
     {
-        result = IteratePathSize(iteratorRef, true, sizePtr);
+        result = IteratePathSize(iteratorRef, true, sizePtr, NULL);
     }
 
     le_cfg_CancelTxn(iteratorRef);
@@ -1478,12 +1488,12 @@ le_result_t pa_secStore_Read
 
 //--------------------------------------------------------------------------------------------------
 /**
- * Copy the meta file to the specified path.
+ * Write the meta data to the specified path.
  *
  * @return
  *      LE_OK if successful.
- *      LE_NOT_FOUND if the meta file does not exist.
- *      LE_UNAVAILABLE if the sfs is currently unavailable.
+ *      LE_NOT_FOUND if the meta data cannot be retrieved.
+ *      LE_UNAVAILABLE if the secure storage is currently unavailable.
  *      LE_FAULT if there was some other error.
  */
 //--------------------------------------------------------------------------------------------------
@@ -1492,8 +1502,29 @@ le_result_t pa_secStore_CopyMetaTo
     const char* pathPtr             ///< [IN] Destination path of meta file copy.
 )
 {
-    // Not supported in the trustZone secure storage PA. The meta data concept does not exist.
-    return LE_UNSUPPORTED;
+    le_result_t result = LE_OK;
+    FILE *destFilePtr = le_atomFile_CreateStream(pathPtr, LE_FLOCK_WRITE, LE_FLOCK_REPLACE_IF_EXIST,
+                                                 S_IRWXU, NULL);
+    if (NULL == destFilePtr)
+    {
+        return LE_NOT_FOUND;
+    }
+
+    le_cfg_IteratorRef_t iteratorRef = le_cfg_CreateReadTxn(CFG_SECSTORE);
+
+    if (!le_cfg_NodeExists(iteratorRef, ""))
+    {
+        result = LE_NOT_FOUND;
+    }
+    else
+    {
+        result = IteratePathSize(iteratorRef, true, NULL, destFilePtr);
+    }
+
+    le_cfg_CancelTxn(iteratorRef);
+    le_atomFile_CloseStream(destFilePtr);
+
+    return result;
 }
 
 
