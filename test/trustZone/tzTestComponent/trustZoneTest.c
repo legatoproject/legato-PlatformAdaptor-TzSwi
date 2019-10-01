@@ -192,6 +192,7 @@ void tz_TC5()
     uint8_t* plainData = (uint8_t *)PlainText;
     uint32_t plainDataSize = sizeof(PlainText);;
 
+    decryptedDataSize = sizeof(decryptedData);
     result = tz_DecryptData(Key, KeySize, EncryptedData, EncryptedDataSize, decryptedData, &decryptedDataSize);
     LE_TEST_OK(result == LE_OK, "Decrypting text.");
     LE_TEST_INFO("Decrypted text [%s], size [%d]", decryptedData, decryptedDataSize);
@@ -217,7 +218,7 @@ void tz_TC6()
     le_result_t result = tz_EncryptData(Key, KeySize, plainData, plainDataSize, smallEncryptedData, &smallEncryptedDataSize);
     LE_TEST_INFO("Encrypting %d bytes into %d bytes buffer: result %s", plainDataSize, smallEncryptedDataSize,
                  LE_RESULT_TXT(result));
-    LE_TEST_ASSERT(result == LE_FAULT, "Encrypting text into small buffer.");
+    LE_TEST_ASSERT(result == LE_OVERFLOW, "Encrypting text into small buffer.");
 
     uint8_t encryptedData[1024];
     uint32_t encryptedDataSize = sizeof(encryptedData);
@@ -229,7 +230,7 @@ void tz_TC6()
     uint8_t smallDecryptedData[plainDataSize-1];
     uint32_t smallDecryptedDataSize = sizeof(smallDecryptedData);
     result = tz_DecryptData(Key, KeySize, encryptedData, encryptedDataSize, smallDecryptedData, &smallDecryptedDataSize);
-    LE_TEST_ASSERT(result == LE_FAULT, "Decrypting text into small buffer.");
+    LE_TEST_ASSERT(result == LE_OVERFLOW, "Decrypting text into small buffer.");
 }
 
 void tz_TC7()

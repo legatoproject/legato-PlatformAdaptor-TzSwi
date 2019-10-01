@@ -34,6 +34,13 @@
 
 //--------------------------------------------------------------------------------------------------
 /**
+ * Arbitrary size known to be greater than actual encryption overhead
+ */
+//--------------------------------------------------------------------------------------------------
+#define TZ_OVERHEAD                 128
+
+//--------------------------------------------------------------------------------------------------
+/**
  * Trust zone device command and structure definition, must keep adapted to kernel code.
  */
 //--------------------------------------------------------------------------------------------------
@@ -47,6 +54,20 @@ typedef struct
     uint32_t encryptedDataLen;
 }
 TzOpReq_t;
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Plain data buffer memory pool
+ */
+//--------------------------------------------------------------------------------------------------
+static le_mem_PoolRef_t PlainDataPoolRef = NULL;
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Encrypted data buffer memory pool
+ */
+//--------------------------------------------------------------------------------------------------
+static le_mem_PoolRef_t EncryptedDataPoolRef = NULL;
 
 //--------------------------------------------------------------------------------------------------
 /**
@@ -181,11 +202,6 @@ static uint32_t GetMaxEncryptedSize
     uint32_t keySize                    ///< [IN] Size of key.
 )
 {
-    uint8_t             plainData[MAX_DATA_SIZE] = {0};
-    uint32_t            plainDataSize = MAX_DATA_SIZE;
-    int                 overhead = 128; // Arbritrary size known to be greater than actual overhead
-    uint8_t             buf[MAX_DATA_SIZE + overhead];
-    uint32_t            bufSize = sizeof(buf);
     /*
      * Maximum encrypted buffer required to store MAX_DATA_SIZE when encrypted.
      * The size is deterministic and does not matter on the content of the buffer.
@@ -193,20 +209,34 @@ static uint32_t GetMaxEncryptedSize
      * tz uses. Zero means it's not calculated yet.
      */
     static uint32_t     maxEncryptedSize = 0;
+    static bool         initDone = false;
 
-    // Dry-run encryption operation, performed only once.
-    if (0 == maxEncryptedSize)
+    // Initialize memory pools and dry-run encryption operation, performed only once.
+    if (!initDone)
     {
+        PlainDataPoolRef = le_mem_CreatePool("PlainDataBuffer", MAX_DATA_SIZE);
+        EncryptedDataPoolRef = le_mem_CreatePool("EncryptedDataBuffer",
+                                                 MAX_DATA_SIZE + TZ_OVERHEAD);
+        uint8_t *plainDataPtr = le_mem_ForceAlloc(PlainDataPoolRef);
+        memset (plainDataPtr, 0, MAX_DATA_SIZE);
+        uint32_t plainDataSize = MAX_DATA_SIZE;
+        uint8_t *encryptedDataPtr = le_mem_ForceAlloc(EncryptedDataPoolRef);
+        uint32_t encryptedDataSize = MAX_DATA_SIZE + TZ_OVERHEAD;
+
         if (!SendTzRequest(TZDEV_IOCTL_SEAL_REQ, keyPtr, &keySize,
-            plainData, &plainDataSize, buf, &bufSize))
+            plainDataPtr, &plainDataSize, encryptedDataPtr, &encryptedDataSize))
         {
             LE_ERROR("Error encrypting max buffer.");
         }
         else
         {
-            maxEncryptedSize = bufSize;
+            maxEncryptedSize = encryptedDataSize;
             LE_INFO("Calculated maxEncryptedSize = %d", maxEncryptedSize);
         }
+
+        le_mem_Release(plainDataPtr);
+        le_mem_Release(encryptedDataPtr);
+        initDone = true;
     }
 
     return maxEncryptedSize;
@@ -245,10 +275,14 @@ le_result_t tz_EncryptData
         return LE_FAULT;
     }
 
-    LE_DEBUG("Encrypting data, size [%d]", plainDataSize);
+    LE_DEBUG("Encrypting data: size %u to buffer size %u",
+             plainDataSize, *encryptedDataSizePtr);
     size_t bytesProcessed = 0;
     size_t bytesEncrypted = 0;
-    do
+    uint8_t *encryptedDataPtr = le_mem_ForceAlloc(EncryptedDataPoolRef);
+    le_result_t result = LE_OK;
+
+    while (bytesProcessed < plainDataSize)
     {
         size_t pDataSize = plainDataSize - bytesProcessed;
 
@@ -257,34 +291,34 @@ le_result_t tz_EncryptData
             pDataSize = MAX_DATA_SIZE;
         }
 
-        size_t eDataSize = *encryptedDataSizePtr - bytesEncrypted;
-
-        if (eDataSize > maxEncryptedSize)
-        {
-
-            eDataSize = maxEncryptedSize;
-        }
+        size_t eDataSize = maxEncryptedSize;
 
         if (!SendTzRequest(TZDEV_IOCTL_SEAL_REQ, keyPtr, &keySize,
-            &(plainData[bytesProcessed]), &pDataSize, &(encryptedData[bytesEncrypted]), &eDataSize))
+            &(plainData[bytesProcessed]), &pDataSize, encryptedDataPtr, &eDataSize))
         {
             LE_ERROR("Error encrypting string.");
-            return LE_FAULT;
+            result = LE_FAULT;
+            break;
+        }
+
+        if (*encryptedDataSizePtr < (bytesEncrypted + eDataSize))
+        {
+            LE_ERROR("Output buffer overflow!");
+            result = LE_OVERFLOW;
+            break;
+        }
+        else
+        {
+            memcpy(&encryptedData[bytesEncrypted], encryptedDataPtr, eDataSize);
         }
 
         bytesProcessed += pDataSize;
         bytesEncrypted += eDataSize;
-
-        if (bytesEncrypted > *encryptedDataSizePtr)
-        {
-            return LE_OVERFLOW;
-        }
     }
-    while (bytesProcessed < plainDataSize);
 
     *encryptedDataSizePtr = bytesEncrypted;
-
-    return LE_OK;
+    le_mem_Release(encryptedDataPtr);
+    return result;
 }
 
 
@@ -320,45 +354,50 @@ le_result_t tz_DecryptData
         return LE_FAULT;
     }
 
+    LE_DEBUG("Decrypting data: size %u to buffer size %u",
+             encryptedDataSize, *decryptedDataSizePtr);
     size_t bytesProcessed = 0;
     size_t bytesDecrypted = 0;
-    do
+    uint8_t *plainDataPtr = le_mem_ForceAlloc(PlainDataPoolRef);
+    le_result_t result = LE_OK;
+
+    while (bytesProcessed < encryptedDataSize)
     {
         size_t eDataSize = encryptedDataSize - bytesProcessed;
 
         if (eDataSize > maxEncryptedSize)
         {
-
             eDataSize = maxEncryptedSize;
         }
 
-        size_t dDataSize = *decryptedDataSizePtr - bytesDecrypted;
-
-        if (dDataSize > MAX_DATA_SIZE)
-        {
-            dDataSize = MAX_DATA_SIZE;
-        }
+        size_t dDataSize = MAX_DATA_SIZE;
 
         if (!SendTzRequest(TZDEV_IOCTL_UNSEAL_REQ, keyPtr, &keySize,
-            &(decryptedData[bytesDecrypted]), &dDataSize, &(encryptedData[bytesProcessed]), &eDataSize))
+            plainDataPtr, &dDataSize, &(encryptedData[bytesProcessed]), &eDataSize))
         {
             LE_ERROR("Error decrypting string.");
-            return LE_FAULT;
+            result = LE_FAULT;
+            break;
+        }
+
+        if (*decryptedDataSizePtr < (bytesDecrypted + dDataSize))
+        {
+            LE_ERROR("Output buffer overflow!");
+            result = LE_OVERFLOW;
+            break;
+        }
+        else
+        {
+            memcpy(&decryptedData[bytesDecrypted], plainDataPtr, dDataSize);
         }
 
         bytesProcessed += eDataSize; // Should be the same as get encrypted size.
         bytesDecrypted += dDataSize;
-
-        if (bytesDecrypted > *decryptedDataSizePtr)
-        {
-            return LE_OVERFLOW;
-        }
     }
-    while (bytesProcessed < encryptedDataSize);
 
     *decryptedDataSizePtr = bytesDecrypted;
-
-    return LE_OK;
+    le_mem_Release(plainDataPtr);
+    return result;
 }
 
 
