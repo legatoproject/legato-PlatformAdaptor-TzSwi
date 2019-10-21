@@ -1336,6 +1336,7 @@ le_result_t pa_secStore_Read
             return result;
         }
 
+        size_t bufSizeBackup = *bufSizePtr;
         result = Read(appName, pathPtr, bufPtr, bufSizePtr);
 
         if (result == LE_OK)
@@ -1344,6 +1345,9 @@ le_result_t pa_secStore_Read
         }
         else
         {
+            // Unsuccessful TrustZone read may have changed the output buffer size, so it needs
+            // to be restored to its original value
+            *bufSizePtr = bufSizeBackup;
             result = ModemRead(pathPtr, bufPtr, bufSizePtr);
 
             if (result != LE_OK)
