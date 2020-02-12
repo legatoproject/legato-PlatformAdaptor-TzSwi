@@ -43,6 +43,7 @@
 #include "interfaces.h"
 #include "pa_secStore.h"
 #include "trustZone.h"
+#include "iksCrypto.h"
 #include "fnmatch.h"
 #include <dlfcn.h>
 
@@ -357,8 +358,13 @@ le_result_t GenerateKey
 
         // Generate key for this app
         key->blobSize = sizeof(key->blob);
+#if LE_CONFIG_SECSTORE_IKS_BACKEND
+        // TODO: use table with function pointers, to be able to decide at runtime which
+        // one to call - this is needed to migrate the data on Legato upgrade.
+        le_result_t result = iksCrypto_GenerateKey(key->blob, &key->blobSize);
+#else
         le_result_t result = tz_GenerateKey(key->blob, &key->blobSize);
-
+#endif
         if (result != LE_OK)
         {
             goto handleWriteError;
@@ -564,7 +570,12 @@ static le_result_t Write
     // is already encrypted. We are just writing the data to another path.
     if ((!isEncrypted) && (bufSize != 0))
     {
-        result = tz_EncryptData(key,
+#if LE_CONFIG_SECSTORE_IKS_BACKEND
+        result = iksCrypto_EncryptData
+#else
+        result = tz_EncryptData
+#endif
+                               (key,
                                 keySize,
                                 (uint8_t*)bufPtr,
                                 bufSize,
@@ -730,7 +741,14 @@ le_result_t Read
                 return result;
             }
 
-            result = tz_DecryptData(key, keySize, encryptedData, encryptedDataSize, bufPtr, bufSize);
+#if LE_CONFIG_SECSTORE_IKS_BACKEND
+            result = iksCrypto_DecryptData
+#else
+            result = tz_DecryptData
+#endif
+                                    (key, keySize,
+                                     encryptedData, encryptedDataSize,
+                                     bufPtr, bufSize);
             if (result != LE_OK)
             {
                 LE_ERROR("Unable to decrypt data [%s].", pathPtr);
@@ -886,7 +904,12 @@ static le_result_t IteratePathSize
                         return result;
                     }
 
-                    result = tz_DecryptData(key,
+#if LE_CONFIG_SECSTORE_IKS_BACKEND
+                    result = iksCrypto_DecryptData
+#else
+                    result = tz_DecryptData
+#endif
+                                           (key,
                                             keySize,
                                             encryptedData,
                                             encryptedDataSize,

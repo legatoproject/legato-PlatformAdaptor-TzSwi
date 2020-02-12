@@ -1,0 +1,15 @@
+sources:
+{
+    iksCrypto.c
+}
+
+cflags:
+{
+    -I${LEGATO_ROOT}/modules/IoTkeystore/iotKeyStore/core/inc
+    -I${LEGATO_ROOT}/modules/IoTkeystore/iotKeyStore/pa/qtee/inc/
+}
+
+ldflags:
+{
+    -liotkeystore
+}
