@@ -1015,6 +1015,9 @@ le_result_t pa_iks_aesGcm_StartDecrypt
                                     ///<         Expected to be LE_IKS_AESGCM_NONCE_SIZE.
 )
 {
+    LE_ASSERT(noncePtr != NULL);
+    LE_ASSERT(nonceSize >= IKS_AES_GCM_NONCE_SIZE);
+
     return ConvertRc(iks_aesGcm_StartDecrypt(UINT64_TO_PTR(session), noncePtr));
 }
 
@@ -1076,6 +1079,272 @@ le_result_t pa_iks_aesGcm_DoneDecrypt
 )
 {
     return ConvertRc(iks_aesGcm_DoneDecrypt(UINT64_TO_PTR(session), tagPtr));
+}
+
+
+//========================= AES CBC routines =====================
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Starts a process to encrypt a message with AES in CBC mode.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_aesCbc_StartEncrypt
+(
+    uint64_t session,           ///< [IN] Session reference.
+    const uint8_t* ivPtr,       ///< [IN] Initialization vector.
+    size_t ivSize               ///< [IN] IV size. Assumed to be LE_IKS_AESCBC_IV_SIZE bytes.
+)
+{
+    LE_ASSERT(ivPtr != NULL);
+    LE_ASSERT(ivSize >= IKS_AES_CBC_IV_SIZE);
+
+    return ConvertRc(iks_aesCbc_StartEncrypt(UINT64_TO_PTR(session), ivPtr));
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Encrypt a chunk of plaintext.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OUT_OF_RANGE
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_aesCbc_Encrypt
+(
+    uint64_t session,                   ///< [IN] Session reference.
+    const uint8_t* plaintextChunkPtr,   ///< [IN] Plaintext chunk.
+    size_t plaintextChunkSize,          ///< [IN] Plaintext chunk size.
+                                        ///<      Must be <= LE_IKS_MAX_PACKET_SIZE and
+                                        ///<      a multiple of LE_IKS_AES_BLOCK_SIZE.
+    uint8_t* ciphertextChunkPtr,        ///< [OUT] Buffer to hold the ciphertext chunk.
+    size_t* ciphertextChunkSizePtr      ///< [INOUT] Ciphertext chunk size.
+                                        ///<         Must be >= plaintextChunkSize.
+
+)
+{
+    LE_ASSERT(plaintextChunkPtr != NULL);
+    LE_ASSERT(ciphertextChunkPtr != NULL);
+    LE_ASSERT(ciphertextChunkSizePtr != NULL);
+    LE_ASSERT(*ciphertextChunkSizePtr >= plaintextChunkSize);
+
+    iks_result_t iksRc = iks_aesCbc_Encrypt(UINT64_TO_PTR(session), plaintextChunkPtr,
+                                            ciphertextChunkPtr, plaintextChunkSize);
+    if (iksRc == IKS_OK)
+    {
+        // Plaintext and ciphertext have the same size.
+        *ciphertextChunkSizePtr = plaintextChunkSize;
+    }
+    return ConvertRc(iksRc);
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Starts a process to decrypt a message with AES in CBC mode.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_aesCbc_StartDecrypt
+(
+    uint64_t session,       ///< [IN] Session reference.
+    const uint8_t* ivPtr,   ///< [IN] Initialization vector.
+    size_t ivSize           ///< [IN] IV size. Assumed to be LE_IKS_AESCBC_IV_SIZE bytes.
+)
+{
+    LE_ASSERT(ivPtr != NULL);
+    LE_ASSERT(ivSize >= IKS_AES_CBC_IV_SIZE);
+
+    return ConvertRc(iks_aesCbc_StartDecrypt(UINT64_TO_PTR(session), ivPtr));
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Decrypt a chunk of ciphertext.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OUT_OF_RANGE
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_aesCbc_Decrypt
+(
+    uint64_t session,                   ///< [IN] Session reference.
+    const uint8_t* ciphertextChunkPtr,  ///< [IN] Ciphertext chunk.
+    size_t ciphertextChunkSize,         ///< [IN] Ciphertext chunk size.
+                                        ///<      Must be <= LE_IKS_MAX_PACKET_SIZE and
+                                        ///<      a multiple of LE_IKS_AES_BLOCK_SIZE.
+    uint8_t* plaintextChunkPtr,         ///< [OUT] Buffer to hold the plaintext chunk.
+    size_t* plaintextChunkSizePtr       ///< [INOUT] Plaintext buffer size.
+                                        ///<         Must be >= ciphertextChunkSize.
+)
+{
+    LE_ASSERT(ciphertextChunkPtr != NULL);
+    LE_ASSERT(plaintextChunkPtr != NULL);
+    LE_ASSERT(plaintextChunkSizePtr != NULL);
+    LE_ASSERT(*plaintextChunkSizePtr >= ciphertextChunkSize);
+
+    iks_result_t iksRc = iks_aesCbc_Decrypt(UINT64_TO_PTR(session), ciphertextChunkPtr,
+                                            plaintextChunkPtr, ciphertextChunkSize);
+    if (iksRc == IKS_OK)
+    {
+        // Plaintext and ciphertext have the same size.
+        *plaintextChunkSizePtr = ciphertextChunkSize;
+    }
+
+    return ConvertRc(iksRc);
+}
+
+
+//========================= AES CMAC routines =====================
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Process message chunks.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_UNSUPPORTED
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_aesCmac_ProcessChunk
+(
+    uint64_t session,           ///< [IN] Session reference.
+    const uint8_t* msgChunkPtr, ///< [IN] Message chunk.
+    size_t msgChunkSize         ///< [IN] Message chunk size. Must be <= LE_IKS_MAX_PACKET_SIZE.
+)
+{
+    return ConvertRc(iks_aesCmac_ProcessChunk(UINT64_TO_PTR(session), msgChunkPtr, msgChunkSize));
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Complete message processing and get the processed message's authentication tag.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_UNSUPPORTED
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_aesCmac_Done
+(
+    uint64_t session,       ///< [IN] Session reference.
+    uint8_t* tagBufPtr,     ///< [OUT] Buffer to hold the authentication tag.
+    size_t* tagBufSizePtr   ///< [INOUT] Authentication tag buffer size.
+)
+{
+    return ConvertRc(iks_aesCmac_Done(UINT64_TO_PTR(session), tagBufPtr, tagBufSizePtr));
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Complete message processing and compare the resulting authentication tag with the supplied tag.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_UNSUPPORTED
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_aesCmac_Verify
+(
+    uint64_t session,           ///< [IN] Session reference.
+    const uint8_t* tagBufPtr,   ///< [IN] Authentication tag to check against.
+    size_t tagBufSize           ///< [IN] Authentication tag size. Cannot be zero.
+)
+{
+    return ConvertRc(iks_aesCmac_Verify(UINT64_TO_PTR(session), tagBufPtr, tagBufSize));
+}
+
+
+//========================= HMAC routines =====================
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Process message chunks.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_UNSUPPORTED
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_hmac_ProcessChunk
+(
+    uint64_t session,           ///< [IN] Session reference.
+    const uint8_t* msgChunkPtr, ///< [IN] Message chunk.
+    size_t msgChunkSize         ///< [IN] Message chunk size. Must be <= LE_IKS_MAX_PACKET_SIZE.
+)
+{
+    return ConvertRc(iks_hmac_ProcessChunk(UINT64_TO_PTR(session), msgChunkPtr, msgChunkSize));
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Complete message processing and get the processed message's authentication tag.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_UNSUPPORTED
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_hmac_Done
+(
+    uint64_t session,       ///< [IN] Session reference.
+    uint8_t* tagBufPtr,     ///< [OUT] Buffer to hold the authentication tag.
+    size_t* tagBufSizePtr   ///< [INOUT] Authentication tag buffer size.
+)
+{
+    return ConvertRc(iks_hmac_Done(UINT64_TO_PTR(session), tagBufPtr, tagBufSizePtr));
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Complete message processing and compare the resulting authentication tag with the supplied tag.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_UNSUPPORTED
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_hmac_Verify
+(
+    uint64_t session,           ///< [IN] Session reference.
+    const uint8_t* tagBufPtr,   ///< [IN] Authentication tag to check against.
+    size_t tagBufSize           ///< [IN] Authentication tag size. Cannot be zero.
+)
+{
+    return ConvertRc(iks_hmac_Verify(UINT64_TO_PTR(session), tagBufPtr, tagBufSize));
 }
 
 
