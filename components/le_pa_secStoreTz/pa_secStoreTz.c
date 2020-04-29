@@ -325,7 +325,7 @@ out:
  *      LE_FAULT if there was some other error.
  */
 //--------------------------------------------------------------------------------------------------
-le_result_t GenerateKey
+static le_result_t GenerateKey
 (
     const char* keyName    ///< [IN] Name of the key.
 )
@@ -345,6 +345,7 @@ le_result_t GenerateKey
     }
 
     Key_t* key = le_mem_ForceAlloc(KeyPool);
+    memset(key, 0, sizeof(*key));
     le_utf8_Copy(key->name, keyName, sizeof(key->name), NULL);
 
     if (keyName)
@@ -399,7 +400,7 @@ handleWriteError:
  *      LE_FAULT if there was some other error.
  */
 //--------------------------------------------------------------------------------------------------
-le_result_t GetKey
+static le_result_t GetKey
 (
     const char* keyName,    ///< [IN] Name of the key.
     uint8_t* keyPtr,        ///< [IN/OUT] Key blob for the specified key name.
@@ -445,6 +446,76 @@ le_result_t GetKey
 
 //--------------------------------------------------------------------------------------------------
 /**
+ * Check whether the key is valid.
+ *
+ * @return
+ *      true if key is valid, false otherwise.
+ */
+//--------------------------------------------------------------------------------------------------
+static bool IsKeyValid
+(
+    Key_t *keyPtr
+)
+{
+    le_result_t result;
+    uint8_t plainBuf[4] = {0};
+    uint8_t encryptedBuf[128];  // must accomodate the encryption overhead
+    uint32_t encryptedBufSize = sizeof(encryptedBuf);
+
+    // Check whether the key can encrypt a small data array
+#if LE_CONFIG_SECSTORE_IKS_BACKEND
+    result = iksCrypto_EncryptData
+#else
+    result = tz_EncryptData
+#endif
+                           (keyPtr->blob,
+                            keyPtr->blobSize,
+                            (uint8_t*)plainBuf,
+                            sizeof(plainBuf),
+                            encryptedBuf,
+                            &encryptedBufSize);
+
+    return (result == LE_OK);
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Clean up in a situation of corrupted/invalid/compromized keys.
+ *
+ * @return
+ *      LE_OK if successful.
+ *      LE_FAULT if there was error.
+ */
+//--------------------------------------------------------------------------------------------------
+static le_result_t ResetKeys
+(
+    le_hashmap_Ref_t map            ///< [IN] The hash map to import the meta data to.
+)
+{
+    // delete the key file
+    LE_INFO("Recovering the keys file.");
+    le_result_t result = le_atomFile_Delete(KEY_FILE);
+    if (result != LE_OK)
+    {
+        LE_ERROR("Error deleting key file");
+        return LE_FAULT;
+    }
+
+    // free all keys and empty the map
+    le_hashmap_It_Ref_t iter = le_hashmap_GetIterator(map);
+    while (le_hashmap_NextNode(iter) == LE_OK)
+    {
+        Key_t* key = le_hashmap_GetValue(iter);
+        le_hashmap_Remove(map, key->name);
+    }
+
+    return LE_OK;
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
  * Imports key objects from a file into a hash map.
  *
  * @return
@@ -453,10 +524,9 @@ le_result_t GetKey
  *      LE_FAULT if there was some other error.
  */
 //--------------------------------------------------------------------------------------------------
-le_result_t ImportKey
+static le_result_t ImportKey
 (
-    le_hashmap_Ref_t map,           ///< [IN] The hash map to import the meta data to.
-    const char* keyFilePtr          ///< [IN] Name of the file that contains the keys.
+    le_hashmap_Ref_t map            ///< [IN] The hash map to import the meta data to.
 )
 {
     // Check content of file
@@ -479,6 +549,7 @@ le_result_t ImportKey
     while (1)
     {
         key = le_mem_ForceAlloc(KeyPool);
+        memset(key, 0, sizeof(*key));
         dataRead = fread(key->name, sizeof(char), sizeof(key->name), fp);
         if (dataRead != sizeof(key->name))
         {
@@ -497,8 +568,16 @@ le_result_t ImportKey
             goto handleReadError;
         }
 
-        LE_DEBUG("Importing key [%s] size [%d]", (char*)key->name, key->blobSize);
-        le_hashmap_Put(map, key->name, key);
+        if (IsKeyValid(key))
+        {
+            LE_DEBUG("Importing key [%s] size [%d]", (char*)key->name, key->blobSize);
+            le_hashmap_Put(map, key->name, key);
+        }
+        else
+        {
+            LE_ERROR("Key '%s' is invalid", key->name);
+            goto handleReadError;
+        }
     }
 
 handleReadError:
@@ -674,7 +753,7 @@ static le_result_t ModemRead
  *      LE_FAULT if there was some other error.
  */
 //--------------------------------------------------------------------------------------------------
-le_result_t Read
+static le_result_t Read
 (
     const char* keyName,    ///< [IN] Name of the key.
     const char* pathPtr,    ///< [IN] Path to read from.
@@ -756,7 +835,7 @@ le_result_t Read
  *      LE_FAULT if there was an error.
  */
 //--------------------------------------------------------------------------------------------------
-le_result_t Delete
+static le_result_t Delete
 (
     const char* pathPtr    ///< [IN] Path to delete.
 )
@@ -977,7 +1056,7 @@ static le_result_t GetSize
  *      LE_FAULT if there was an error.
  */
 //--------------------------------------------------------------------------------------------------
-le_result_t ModemCopyMetaTo
+static le_result_t ModemCopyMetaTo
 (
     const char* pathPtr
 )
@@ -1062,7 +1141,7 @@ static le_result_t ReadLine
  *      LE_FAULT if there was an error.
  */
 //--------------------------------------------------------------------------------------------------
-le_result_t CopySfsFromMeta
+static le_result_t CopySfsFromMeta
 (
     const char* metaFilePtr
 )
@@ -1182,7 +1261,7 @@ handleMetaCorruption:
  *      LE_FAULT if there was some other error.
  */
 //--------------------------------------------------------------------------------------------------
-le_result_t InitSfs
+static le_result_t InitSfs
 (
     void
 )
@@ -1191,11 +1270,15 @@ le_result_t InitSfs
     if (!SfsReady)
     {
         LE_DEBUG("Initializing SFS");
-        result = ImportKey(KeyMap, KEY_FILE);
+        result = ImportKey(KeyMap);
 
         if (result != LE_OK)
         {
-            return result;
+            result = ResetKeys(KeyMap);
+            if (result != LE_OK)
+            {
+                return result;
+            }
         }
 
         // Port old secure storage data from modem SFS.
@@ -1661,7 +1744,7 @@ le_result_t pa_secStore_GetTotalSpace
  *      LE_FAULT if there was an error.
  */
 //--------------------------------------------------------------------------------------------------
-le_result_t IteratePathCopy
+static le_result_t IteratePathCopy
 (
     le_cfg_IteratorRef_t iteratorRef,       ///< [IN] Path.
     bool isRoot,                            ///< [IN] Used to mark the current iterator as root
