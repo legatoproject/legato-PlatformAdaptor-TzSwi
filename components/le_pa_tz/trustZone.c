@@ -211,12 +211,18 @@ static uint32_t GetMaxEncryptedSize
     static uint32_t     maxEncryptedSize = 0;
     static bool         initDone = false;
 
-    // Initialize memory pools and dry-run encryption operation, performed only once.
+    // Initialize memory pools and dry-run encryption operation.
     if (!initDone)
     {
-        PlainDataPoolRef = le_mem_CreatePool("PlainDataBuffer", MAX_DATA_SIZE);
-        EncryptedDataPoolRef = le_mem_CreatePool("EncryptedDataBuffer",
-                                                 MAX_DATA_SIZE + TZ_OVERHEAD);
+        if (PlainDataPoolRef == NULL)
+        {
+            PlainDataPoolRef = le_mem_CreatePool("PlainDataBuffer", MAX_DATA_SIZE);
+        }
+        if (EncryptedDataPoolRef == NULL)
+        {
+            EncryptedDataPoolRef = le_mem_CreatePool("EncryptedDataBuffer",
+                                                     MAX_DATA_SIZE + TZ_OVERHEAD);
+        }
         uint8_t *plainDataPtr = le_mem_ForceAlloc(PlainDataPoolRef);
         memset (plainDataPtr, 0, MAX_DATA_SIZE);
         uint32_t plainDataSize = MAX_DATA_SIZE;
@@ -232,11 +238,11 @@ static uint32_t GetMaxEncryptedSize
         {
             maxEncryptedSize = encryptedDataSize;
             LE_INFO("Calculated maxEncryptedSize = %d", maxEncryptedSize);
+            initDone = true;
         }
 
         le_mem_Release(plainDataPtr);
         le_mem_Release(encryptedDataPtr);
-        initDone = true;
     }
 
     return maxEncryptedSize;
