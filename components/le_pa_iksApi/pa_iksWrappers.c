@@ -152,7 +152,7 @@ uint64_t pa_iks_CreateKey
     uint32_t            keyUsage    ///< [IN] Key usage.
 )
 {
-    return PTR_TO_UINT64(iks_CreateKey(keyId, keyUsage));
+    return PTR_TO_UINT64(iks_CreateKey(keyId, (iks_KeyUsage_t) keyUsage));
 }
 
 
@@ -172,7 +172,7 @@ uint64_t pa_iks_CreateKeyByType
     uint32_t            keySize     ///< [IN] Key size in bytes.
 )
 {
-    return PTR_TO_UINT64(iks_CreateKeyByType(keyId, keyType, keySize));
+    return PTR_TO_UINT64(iks_CreateKeyByType(keyId, (iks_KeyType_t) keyType, (size_t) keySize));
 }
 
 
@@ -192,7 +192,7 @@ le_result_t pa_iks_GetKeyType
     int32_t*            keyTypePtr  ///< [OUT] Key type.
 )
 {
-    iks_KeyType_t  keyType = 0;
+    iks_KeyType_t  keyType = (iks_KeyType_t)0;
     le_result_t rc = ConvertRc(iks_GetKeyType((iks_KeyRef_t) (uintptr_t) keyRef, &keyType));
     *keyTypePtr = keyType;
 
@@ -235,7 +235,7 @@ le_result_t pa_iks_IsKeySizeValid
     uint32_t            keySize     ///< [IN] Key size in bytes.
 )
 {
-    return ConvertRc(iks_IsKeySizeValid(keyType, keySize));
+    return ConvertRc(iks_IsKeySizeValid((iks_KeyType_t)keyType, keySize));
 }
 
 
@@ -828,7 +828,7 @@ le_result_t pa_iks_aesGcm_EncryptPacket
     iks_result_t iksRc = iks_aesGcm_EncryptPacket(UINT64_TO_PTR(keyRef), noncePtr,
                                                   aadPtr, aadSize,
                                                   plaintextPtr, ciphertextPtr,
-                                                  plaintextSize, tagPtr);
+                                                  plaintextSize, tagPtr, *tagSizePtr);
     if (iksRc == IKS_OK)
     {
         // Plaintext and ciphertext have the same size.
@@ -874,7 +874,7 @@ le_result_t pa_iks_aesGcm_DecryptPacket
 
     iks_result_t iksRc = iks_aesGcm_DecryptPacket(UINT64_TO_PTR(keyRef), noncePtr, aadPtr, aadSize,
                                                   ciphertextPtr, plaintextPtr, *plaintextSizePtr,
-                                                  tagPtr);
+                                                  tagPtr, tagSize);
     if (iksRc == IKS_OK)
     {
         // Plaintext and ciphertext have the same size.
@@ -993,7 +993,7 @@ le_result_t pa_iks_aesGcm_DoneEncrypt
     LE_ASSERT(tagSizePtr != NULL);
     LE_ASSERT(*tagSizePtr >= IKS_AES_GCM_TAG_SIZE);
 
-    return ConvertRc(iks_aesGcm_DoneEncrypt(UINT64_TO_PTR(session), tagPtr));
+    return ConvertRc(iks_aesGcm_DoneEncrypt(UINT64_TO_PTR(session), tagPtr, *tagSizePtr));
 }
 
 
@@ -1078,7 +1078,7 @@ le_result_t pa_iks_aesGcm_DoneDecrypt
                                 ///<         Expected to be LE_IKS_AESGCM_TAG_SIZE.
 )
 {
-    return ConvertRc(iks_aesGcm_DoneDecrypt(UINT64_TO_PTR(session), tagPtr));
+    return ConvertRc(iks_aesGcm_DoneDecrypt(UINT64_TO_PTR(session), tagPtr, tagSize ));
 }
 
 
@@ -1254,7 +1254,7 @@ le_result_t pa_iks_aesCmac_Done
     size_t* tagBufSizePtr   ///< [INOUT] Authentication tag buffer size.
 )
 {
-    return ConvertRc(iks_aesCmac_Done(UINT64_TO_PTR(session), tagBufPtr, tagBufSizePtr));
+    return ConvertRc(iks_aesCmac_Done(UINT64_TO_PTR(session), tagBufPtr, *tagBufSizePtr));
 }
 
 
@@ -1322,7 +1322,7 @@ le_result_t pa_iks_hmac_Done
     size_t* tagBufSizePtr   ///< [INOUT] Authentication tag buffer size.
 )
 {
-    return ConvertRc(iks_hmac_Done(UINT64_TO_PTR(session), tagBufPtr, tagBufSizePtr));
+    return ConvertRc(iks_hmac_Done(UINT64_TO_PTR(session), tagBufPtr, *tagBufSizePtr));
 }
 
 
