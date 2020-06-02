@@ -1348,6 +1348,516 @@ le_result_t pa_iks_hmac_Verify
 }
 
 
+//========================= RSA routines =====================
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Encrypts a message with RSAES-OAEP (RSA Encryption Scheme - Optimal Asymmetric Encryption
+ * Padding).
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OUT_OF_RANGE
+ *      LE_OVERFLOW
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_rsa_Oaep_Encrypt
+(
+    uint64_t keyRef,                ///< [IN] Key reference.
+    const uint8_t* labelPtr,        ///< [IN] Label. NULL if not used.
+    size_t labelSize,               ///< [IN] Label size.
+    const uint8_t* plaintextPtr,    ///< [IN] Plaintext. NULL if not used.
+    size_t plaintextSize,           ///< [IN] Plaintext size.
+    uint8_t* ciphertextPtr,         ///< [OUT] Buffer to hold the ciphertext.
+    size_t* ciphertextSizePtr       ///< [INOUT] Ciphertext buffer size.
+)
+{
+    return ConvertRc(iks_rsaOaep_Encrypt(UINT64_TO_PTR(keyRef), labelPtr, labelSize,
+                                         plaintextPtr, plaintextSize,
+                                         ciphertextPtr, ciphertextSizePtr));
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Decrypts a message with RSAES-OAEP (RSA Encryption Scheme - Optimal Asymmetric Encryption
+ * Padding).
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OUT_OF_RANGE
+ *      LE_FORMAT_ERROR
+ *      LE_OVERFLOW
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+LE_SHARED le_result_t pa_iks_rsa_Oaep_Decrypt
+(
+    uint64_t keyRef,                ///< [IN] Key reference.
+    const uint8_t* labelPtr,        ///< [IN] Label. NULL if not used.
+    size_t labelSize,               ///< [IN] Label size.
+    const uint8_t* ciphertextPtr,   ///< [IN] Ciphertext.
+    size_t ciphertextSize,          ///< [IN] Ciphertext size.
+    uint8_t* plaintextPtr,          ///< [OUT] Buffer to hold the plaintext.
+    size_t* plaintextSizePtr        ///< [INOUT] Plaintext size.
+)
+{
+    return ConvertRc(iks_rsaOaep_Decrypt(UINT64_TO_PTR(keyRef), labelPtr, labelSize,
+                                         ciphertextPtr, ciphertextSize,
+                                         plaintextPtr, plaintextSizePtr));
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Generates a signature on the hash digest of a message with RSASSA-PSS (RSA Signature Scheme with
+ * Appendix - Probabilistic Signature Scheme).
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OUT_OF_RANGE
+ *      LE_OVERFLOW
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+LE_SHARED le_result_t pa_iks_rsa_Pss_GenSig
+(
+    uint64_t keyRef,            ///< [IN] Key reference.
+    uint32_t saltSize,          ///< [IN] Salt size.
+    const uint8_t* digestPtr,   ///< [IN] Digest to sign.
+    size_t digestSize,          ///< [IN] Digest size.
+    uint8_t* signaturePtr,      ///< [OUT] Buffer to hold the signature.
+    size_t* signatureSizePtr    ///< [INOUT] Signature size.
+)
+{
+    return ConvertRc(iks_rsaPss_GenSig(UINT64_TO_PTR(keyRef), (size_t) saltSize,
+                                       digestPtr, digestSize,
+                                       signaturePtr, signatureSizePtr));
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Verifies a signature of the hash digest of a message with RSASSA-PSS (RSA Signature Scheme with
+ * Appendix - Probabilistic Signature Scheme).
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OUT_OF_RANGE
+ *      LE_FORMAT_ERROR
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+LE_SHARED le_result_t pa_iks_rsa_Pss_VerifySig
+(
+    uint64_t keyRef,                ///< [IN] Key reference.
+    uint32_t saltSize,              ///< [IN] Salt size.
+    const uint8_t* digestPtr,       ///< [IN] Digest to sign.
+    size_t digestSize,              ///< [IN] Digest size.
+    const uint8_t* signaturePtr,    ///< [IN] Signature of the message.
+    size_t signatureSize            ///< [IN] Signature size.
+)
+{
+    return ConvertRc(iks_rsaPss_VerifySig(UINT64_TO_PTR(keyRef), (size_t) saltSize,
+                                          digestPtr, digestSize,
+                                          signaturePtr, signatureSize));
+}
+
+
+//========================= ECC routines =====================
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Generate a shared secret between an ECC private key and an ECC public key.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_ecc_Ecdh_GetSharedSecret
+(
+    uint64_t privKeyRef,    ///< [IN] Private key reference.
+    uint64_t pubKeyRef,     ///< [IN] Publid Key reference.
+    uint8_t* secretPtr,     ///< [OUT] Buffer to hold the shared secret.
+    size_t* secretSizePtr   ///< [INOUT] Shared secret size.
+)
+{
+    return ConvertRc(iks_ecdh_GetSharedSecret(UINT64_TO_PTR(privKeyRef), UINT64_TO_PTR(pubKeyRef),
+                     secretPtr, secretSizePtr));
+
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Generate an ECDSA signature on the hash digest of a message.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OVERFLOW
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_ecc_Ecdsa_GenSig
+(
+    uint64_t keyRef,            ///< [IN] Key reference.
+    const uint8_t* digestPtr,   ///< [IN] Digest to sign.
+    size_t digestSize,          ///< [IN] Digest size.
+    uint8_t* signaturePtr,      ///< [OUT] Buffer to hold the signature.
+    size_t* signatureSizePtr    ///< [INOUT] Signature size.
+)
+{
+    return ConvertRc(iks_ecdsa_GenSig(UINT64_TO_PTR(keyRef), digestPtr, digestSize,
+                                      signaturePtr, signatureSizePtr));
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Verifies a signature of the hash digest of a message with ECDSA.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_FORMAT_ERROR
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_ecc_Ecdsa_VerifySig
+(
+    uint64_t keyRef,                ///< [IN] Key reference.
+    const uint8_t* digestPtr,       ///< [IN] Digest of the message.
+    size_t digestSize,              ///< [IN] Digest size.
+    const uint8_t* signaturePtr,    ///< [IN] Signature of the message.
+    size_t signatureSize            ///< [IN] Signature size.
+)
+{
+    return ConvertRc(iks_ecdsa_VerifySig(UINT64_TO_PTR(keyRef), digestPtr, digestSize,
+                                         signaturePtr, signatureSize));
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Encrypts and integrity protects of a short message with ECIES (Elliptic Curve Integrated
+ * Encryption System).
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OUT_OF_RANGE
+ *      LE_OVERFLOW
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_ecc_Ecies_EncryptPacket
+(
+    uint64_t keyRef,                ///< [IN] Key reference.
+    const uint8_t* labelPtr,        ///< [IN] Label. NULL if not used.
+    size_t labelSize,               ///< [IN] Label size.
+    const uint8_t* aadPtr,          ///< [IN] AAD chunk. NULL if not used.
+    size_t aadSize,                 ///< [IN] AAD chunk size.
+    const uint8_t* plaintextPtr,    ///< [IN] Plaintext chunk. NULL if not used.
+    size_t plaintextSize,           ///< [IN] Plaintext chunk size.
+    uint8_t* ciphertextPtr,         ///< [OUT] Buffer to hold the ciphertext chunk.
+    size_t* ciphertextSizePtr,      ///< [INOUT] Ciphertext chunk size.
+    uint8_t* ephemKeyPtr,           ///< [OUT] Serialized ephemeral public key.
+    size_t* ephemKeySizePtr,        ///< [INOUT] Serialized ephemeral key size.
+    uint8_t* saltPtr,               ///< [OUT] Buffer to hold the salt.
+    size_t* saltSizePtr,            ///< [INOUT] Salt size.
+    uint8_t* tagPtr,                ///< [OUT] Buffer to hold the authentication tag.
+    size_t* tagSizePtr              ///< [INOUT] Tag size. Cannot be zero.
+)
+{
+    if (ciphertextPtr != NULL)
+    {
+        LE_ASSERT(ciphertextSizePtr != NULL);
+        LE_ASSERT(*ciphertextSizePtr >= plaintextSize);
+    }
+
+    iks_result_t iksRc = iks_ecies_EncryptPacket(UINT64_TO_PTR(keyRef),
+                                                 labelPtr, labelSize,
+                                                 aadPtr, aadSize,
+                                                 plaintextPtr, ciphertextPtr, plaintextSize,
+                                                 ephemKeyPtr, ephemKeySizePtr,
+                                                 saltPtr, saltSizePtr,
+                                                 tagPtr, *tagSizePtr);
+
+    if ((iksRc == IKS_OK) && (ciphertextSizePtr != NULL))
+    {
+        // Plaintext and ciphertext have the same size.
+        *ciphertextSizePtr = plaintextSize;
+    }
+
+    return ConvertRc(iksRc);
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Decrypts and checks the integrity of a short message with ECIES (Elliptic Curve Integrated
+ * Encryption System).
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OUT_OF_RANGE
+ *      LE_OVERFLOW
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_ecc_Ecies_DecryptPacket
+(
+    uint64_t keyRef,                ///< [IN] Key reference.
+    const uint8_t* labelPtr,        ///< [IN] Label. NULL if not used.
+    size_t labelSize,               ///< [IN] Label size.
+    const uint8_t* aadPtr,          ///< [IN] AAD chunk. NULL if not used.
+    size_t aadSize,                 ///< [IN] AAD size.
+    const uint8_t* ephemKeyPtr,     ///< [IN] Serialized ephemeral public key.
+    size_t ephemKeySize,            ///< [IN] Ephemeral public key size.
+    const uint8_t* saltPtr,         ///< [IN] Salt.
+    size_t saltSize,                ///< [IN] Salt size.
+    const uint8_t* ciphertextPtr,   ///< [IN] Ciphertext chunk.
+    size_t ciphertextSize,          ///< [IN] Ciphertext chunk size.
+    uint8_t* plaintextPtr,          ///< [OUT] Buffer to hold the plaintext chunk.
+    size_t* plaintextSizePtr,       ///< [INOUT] Plaintext chunk size.
+    const uint8_t* tagPtr,          ///< [IN] Authentication tag.
+    size_t tagSize                  ///< [IN] Tag size.
+)
+{
+    if (plaintextPtr != NULL)
+    {
+        LE_ASSERT(plaintextSizePtr != NULL);
+        LE_ASSERT(*plaintextSizePtr >= ciphertextSize);
+    }
+
+    iks_result_t iksRc = iks_ecies_DecryptPacket(UINT64_TO_PTR(keyRef), labelPtr, labelSize,
+                                                 aadPtr, aadSize,
+                                                 ephemKeyPtr, ephemKeySize,
+                                                 saltPtr, saltSize,
+                                                 ciphertextPtr, plaintextPtr, ciphertextSize,
+                                                 tagPtr, tagSize);
+
+    if ((iksRc == IKS_OK) && (plaintextSizePtr != NULL))
+    {
+        // Plaintext and ciphertext have the same size.
+        *plaintextSizePtr = ciphertextSize;
+    }
+
+    return ConvertRc(iksRc);
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Starts a process to encrypt and integrity protect a message with ECIES (Elliptic Curve Integrated
+ * Encryption System).
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OUT_OF_RANGE
+ *      LE_OVERFLOW
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_ecc_Ecies_StartEncrypt
+(
+    uint64_t session,           ///< [IN] Session reference.
+    const uint8_t* labelPtr,    ///< [IN] Label. NULL if not used.
+    size_t labelSize,           ///< [IN] Label size.
+    uint8_t* ephemKeyPtr,       ///< [OUT] Serialized ephemeral public key.
+    size_t* ephemKeySizePtr,    ///< [INOUT] Ephemeral public key size.
+    uint8_t* saltPtr,           ///< [OUT] Buffer to hold the salt.
+    size_t* saltSizePtr         ///< [INOUT] Salt size.
+)
+{
+    return ConvertRc(iks_ecies_StartEncrypt(UINT64_TO_PTR(session), labelPtr, labelSize,
+                                            ephemKeyPtr, ephemKeySizePtr,
+                                            saltPtr, saltSizePtr));
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Process a chunk of AAD (Additional Authenticated Data).
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OUT_OF_RANGE
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_ecc_Ecies_ProcessAad
+(
+    uint64_t session,               ///< [IN] Session reference.
+    const uint8_t* aadChunkPtr,     ///< [IN] AAD chunk.
+    size_t aadChunkSize             ///< [IN] AAD chunk size.
+)
+{
+    return ConvertRc(iks_ecies_ProcessAad(UINT64_TO_PTR(session), aadChunkPtr, aadChunkSize));
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Encrypt a chunk of plaintext.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OUT_OF_RANGE
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_ecc_Ecies_Encrypt
+(
+    uint64_t session,                   ///< [IN] Session reference.
+    const uint8_t* plaintextChunkPtr,   ///< [IN] Plaintext chunk. NULL if not used.
+    size_t plaintextChunkSize,          ///< [IN] Plaintext chunk size.
+    uint8_t* ciphertextChunkPtr,        ///< [OUT] Buffer to hold the ciphertext chunk.
+    size_t* ciphertextChunkSizePtr      ///< [INOUT] Ciphertext chunk size.
+)
+{
+    LE_ASSERT(plaintextChunkPtr != NULL);
+    LE_ASSERT(ciphertextChunkPtr != NULL);
+    LE_ASSERT(ciphertextChunkSizePtr != NULL);
+    LE_ASSERT(*ciphertextChunkSizePtr >= plaintextChunkSize);
+
+    iks_result_t iksRc = iks_ecies_Encrypt(UINT64_TO_PTR(session),
+                                           plaintextChunkPtr, ciphertextChunkPtr,
+                                           plaintextChunkSize);
+    if (iksRc == IKS_OK)
+    {
+        // Plaintext and ciphertext have the same size.
+        *ciphertextChunkSizePtr = plaintextChunkSize;
+    }
+    return ConvertRc(iksRc);
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Complete encryption and calculate the authentication tag.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OVERFLOW
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_ecc_Ecies_DoneEncrypt
+(
+    uint64_t session,   ///< [IN] Session reference.
+    uint8_t* tagPtr,    ///< [OUT] Buffer to hold the authentication tag.
+    size_t* tagSizePtr  ///< [INOUT] Tag size.
+)
+{
+    LE_ASSERT(tagSizePtr != NULL);
+
+    return ConvertRc(iks_ecies_DoneEncrypt(UINT64_TO_PTR(session), tagPtr, *tagSizePtr));
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Starts a process to decrypt and check the integrity of a message with ECIES (Elliptic Curve
+ * Integrated Encryption System).
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OUT_OF_RANGE
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_ecc_Ecies_StartDecrypt
+(
+    uint64_t session,           ///< [IN] Session reference.
+    const uint8_t* labelPtr,    ///< [IN] Label. NULL if not used.
+    size_t labelSize,           ///< [IN] Label size.
+    const uint8_t* ephemKeyPtr, ///< [IN] Serialized ephemeral public key.
+    size_t ephemKeySize,        ///< [IN] Ephemeral public key size.
+    const uint8_t* saltPtr,     ///< [IN] Salt.
+    size_t saltSize             ///< [IN] Salt size.
+)
+{
+    return iks_ecies_StartDecrypt(UINT64_TO_PTR(session), labelPtr, labelSize,
+                                  ephemKeyPtr, ephemKeySize,
+                                  saltPtr, saltSize);
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Decrypt a chunk of ciphertext.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_OUT_OF_RANGE
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_ecc_Ecies_Decrypt
+(
+    uint64_t session,                   ///< [IN] Session reference.
+    const uint8_t* ciphertextChunkPtr,  ///< [IN] Ciphertext chunk.
+    size_t ciphertextChunkSize,         ///< [IN] Ciphertext chunk size.
+    uint8_t* plaintextChunkPtr,         ///< [OUT] Buffer to hold the plaintext chunk.
+    size_t* plaintextChunkSizePtr       ///< [INOUT] Plaintext chunk size.
+)
+{
+    LE_ASSERT(ciphertextChunkPtr != NULL);
+    LE_ASSERT(plaintextChunkPtr != NULL);
+    LE_ASSERT(plaintextChunkSizePtr != NULL);
+    LE_ASSERT(*plaintextChunkSizePtr >= ciphertextChunkSize);
+
+    iks_result_t iksRc = iks_ecies_Decrypt(UINT64_TO_PTR(session),
+                                           ciphertextChunkPtr, plaintextChunkPtr,
+                                           ciphertextChunkSize);
+
+    if (iksRc == IKS_OK)
+    {
+        // Plaintext and ciphertext have the same size.
+        *plaintextChunkSizePtr = ciphertextChunkSize;
+    }
+
+    return ConvertRc(iksRc);
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Complete decryption and verify the integrity.
+ *
+ * @return
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+le_result_t pa_iks_ecc_Ecies_DoneDecrypt
+(
+    uint64_t session,       ///< [IN] Session reference.
+    const uint8_t* tagPtr,  ///< [IN] Authentication tag.
+    size_t tagSize          ///< [IN] Tag size.
+)
+{
+    return ConvertRc(iks_ecies_DoneDecrypt(UINT64_TO_PTR(session), tagPtr, tagSize));
+}
+
+
 //--------------------------------------------------------------------------------------------------
 /**
  * Init this component
