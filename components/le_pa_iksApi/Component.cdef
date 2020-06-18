@@ -3,6 +3,7 @@ sources:
     pa_iksWrappers.c
 }
 
+#if ${LE_CONFIG_LINUX} = y
 cflags:
 {
     -I${LEGATO_ROOT}/components/secStore/platformAdaptor/inc
@@ -11,9 +12,13 @@ cflags:
     -I${LEGATO_ROOT}/modules/IoTkeystore/iotKeyStore/pa/qtee/inc/
 }
 
-#if ${LE_CONFIG_LINUX} = y
 ldflags:
 {
     -liotkeystore
+}
+#else
+cflags:
+{
+    -I${LEGATO_ROOT}/components/secStore/platformAdaptor/inc
 }
 #endif
