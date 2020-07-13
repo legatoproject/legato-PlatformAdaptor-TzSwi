@@ -45,6 +45,8 @@ static le_result_t ConvertRc
             return LE_NO_MEMORY;
         case IKS_FORMAT_ERROR:
             return LE_FORMAT_ERROR;
+        case IKS_DUPLICATE:
+            return LE_DUPLICATE;
         default:
             return LE_FAULT;
     }
@@ -124,16 +126,26 @@ le_result_t pa_iks_DeleteModuleId
  * Gets a reference to a key.
  *
  * @return
- *      Reference to the key.
- *      0 if the key could not be found.
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_NOT_FOUND
+ *      LE_NO_MEMORY
+ *      LE_FAULT
  */
 //--------------------------------------------------------------------------------------------------
-uint64_t pa_iks_GetKey
+le_result_t pa_iks_GetKey
 (
-    const char*     keyId           ///< [IN] Identifier string.
+    const char*     keyId,          ///< [IN] Identifier string.
+    uint64_t*       keyRefPtr       ///< [OUT] Key reference.
 )
 {
-    return PTR_TO_UINT64(iks_GetKey(keyId));
+    iks_KeyRef_t keyRef;
+
+    LE_ASSERT(keyRefPtr != NULL);
+    iks_result_t iksRc = iks_GetKey(keyId, &keyRef);
+    *keyRefPtr = PTR_TO_UINT64(keyRef);
+
+    return ConvertRc(iksRc);
 }
 
 
@@ -142,17 +154,27 @@ uint64_t pa_iks_GetKey
  * Creates a new key.
  *
  * @return
- *      Reference to the key if successful.
- *      0 if the keyId is already being used or is invalid or the keyUsage is invalid.
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_DUPLICATE
+ *      LE_NO_MEMORY
+ *      LE_FAULT
  */
 //--------------------------------------------------------------------------------------------------
-uint64_t pa_iks_CreateKey
+le_result_t pa_iks_CreateKey
 (
     const char*         keyId,      ///< [IN] Identifier string.
-    uint32_t            keyUsage    ///< [IN] Key usage.
+    uint32_t            keyUsage,   ///< [IN] Key usage.
+    uint64_t*           keyRefPtr   ///< [OUT] Key reference.
 )
 {
-    return PTR_TO_UINT64(iks_CreateKey(keyId, (iks_KeyUsage_t) keyUsage));
+    iks_KeyRef_t keyRef;
+
+    LE_ASSERT(keyRefPtr != NULL);
+    iks_result_t iksRc = iks_CreateKey(keyId, (iks_KeyUsage_t) keyUsage, &keyRef);
+    *keyRefPtr = PTR_TO_UINT64(keyRef);
+
+    return ConvertRc(iksRc);
 }
 
 
@@ -161,18 +183,30 @@ uint64_t pa_iks_CreateKey
  * Creates a new key of a specific type.
  *
  * @return
- *      Reference to the key if successful.
- *      0 if the keyId is already being used or if there was some other error.
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_DUPLICATE
+ *      LE_OUT_OF_RANGE
+ *      LE_NO_MEMORY
+ *      LE_FAULT
  */
 //--------------------------------------------------------------------------------------------------
-uint64_t pa_iks_CreateKeyByType
+le_result_t pa_iks_CreateKeyByType
 (
     const char*         keyId,      ///< [IN] Identifier string.
     int32_t             keyType,    ///< [IN] Key type.
-    uint32_t            keySize     ///< [IN] Key size in bytes.
+    uint32_t            keySize,    ///< [IN] Key size in bytes.
+    uint64_t*           keyRefPtr   ///< [OUT] Key reference.
 )
 {
-    return PTR_TO_UINT64(iks_CreateKeyByType(keyId, (iks_KeyType_t) keyType, (size_t) keySize));
+    iks_KeyRef_t keyRef;
+
+    LE_ASSERT(keyRefPtr != NULL);
+    iks_result_t iksRc = iks_CreateKeyByType(keyId, (iks_KeyType_t) keyType,
+                                             (size_t) keySize, &keyRef);
+    *keyRefPtr = PTR_TO_UINT64(keyRef);
+
+    return ConvertRc(iksRc);
 }
 
 
@@ -394,16 +428,26 @@ le_result_t pa_iks_GetPubKeyValue
  * Gets a reference to a digest.
  *
  * @return
- *      Reference to the digest.
- *      0 if the digest could not be found.
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_NOT_FOUND
+ *      LE_NO_MEMORY
+ *      LE_FAULT
  */
 //--------------------------------------------------------------------------------------------------
-uint64_t pa_iks_GetDigest
+le_result_t pa_iks_GetDigest
 (
-    const char* digestId ///< [IN] Identifier string.
+    const char*     digestId,       ///< [IN] Identifier string.
+    uint64_t*       digestRefPtr    ///< [OUT] Digest reference.
 )
 {
-    return PTR_TO_UINT64(iks_GetDigest(digestId));
+    iks_DigestRef_t digestRef;
+
+    LE_ASSERT(digestRefPtr != NULL);
+    iks_result_t iksRc = iks_GetDigest(digestId, &digestRef);
+    *digestRefPtr = PTR_TO_UINT64(digestRef);
+
+    return ConvertRc(iksRc);
 }
 
 
@@ -412,17 +456,28 @@ uint64_t pa_iks_GetDigest
  * Creates a new digest.
  *
  * @return
- *      Reference to the digest if successful.
- *      0 if there was an error.
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_DUPLICATE
+ *      LE_OUT_OF_RANGE
+ *      LE_NO_MEMORY
+ *      LE_FAULT
  */
 //--------------------------------------------------------------------------------------------------
-uint64_t pa_iks_CreateDigest
+le_result_t pa_iks_CreateDigest
 (
-    const char*     digestId,   ///< [IN] Identifier string.
-    uint32_t        digestSize  ///< [IN] Digest size. Must be <= MAX_DIGEST_SIZE.
+    const char*     digestId,       ///< [IN] Identifier string.
+    uint32_t        digestSize,     ///< [IN] Digest size. Must be <= MAX_DIGEST_SIZE.
+    uint64_t*       digestRefPtr    ///< [OUT] Digest reference.
 )
 {
-    return PTR_TO_UINT64(iks_CreateDigest(digestId, digestSize));
+    iks_DigestRef_t digestRef;
+
+    LE_ASSERT(digestRefPtr != NULL);
+    iks_result_t iksRc = iks_CreateDigest(digestId, digestSize, &digestRef);
+    *digestRefPtr = PTR_TO_UINT64(digestRef);
+
+    return ConvertRc(iksRc);
 }
 
 
@@ -607,16 +662,25 @@ le_result_t pa_iks_GetProvisionKey
  * Create a session.
  *
  * @return
- *      A session reference if successful.
- *      0 if the key reference is invalid or does not contain a key value.
+ *      LE_OK
+ *      LE_BAD_PARAMETER
+ *      LE_NO_MEMORY
+ *      LE_FAULT
  */
 //--------------------------------------------------------------------------------------------------
-uint64_t pa_iks_CreateSession
+le_result_t pa_iks_CreateSession
 (
-    uint64_t            keyRef      ///< [IN] Key reference.
+    uint64_t    keyRef,         ///< [IN] Key reference.
+    uint64_t*   sessionRefPtr   ///< [OUT] Session reference.
 )
 {
-    return PTR_TO_UINT64(iks_CreateSession(UINT64_TO_PTR(keyRef)));
+    iks_Session_t sessionRef;
+
+    LE_ASSERT(sessionRefPtr != NULL);
+    iks_result_t iksRc = iks_CreateSession(UINT64_TO_PTR(keyRef), &sessionRef);
+    *sessionRefPtr = PTR_TO_UINT64(sessionRef);
+
+    return ConvertRc(iksRc);
 }
 
 
@@ -1792,9 +1856,9 @@ le_result_t pa_iks_ecc_Ecies_StartDecrypt
     size_t saltSize             ///< [IN] Salt size.
 )
 {
-    return iks_ecies_StartDecrypt(UINT64_TO_PTR(session), labelPtr, labelSize,
-                                  ephemKeyPtr, ephemKeySize,
-                                  saltPtr, saltSize);
+    return ConvertRc(iks_ecies_StartDecrypt(UINT64_TO_PTR(session), labelPtr, labelSize,
+                                            ephemKeyPtr, ephemKeySize,
+                                            saltPtr, saltSize));
 }
 
 
