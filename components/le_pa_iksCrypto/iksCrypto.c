@@ -47,19 +47,16 @@ le_result_t iksCrypto_GenerateKey
 
     const char *keyId = (const char *) keyPtr;
 
-    // Check if the key already exists
-    keyRef = iks_GetKey(keyId);
-    if (NULL != keyRef)
+    // Use keyPtr to pass back Key ID. The key itself is stored inside IoT KeyStore
+    result = iks_CreateKeyByType(keyId, IKS_KEY_TYPE_AES_GCM, 16, &keyRef);
+    if (IKS_DUPLICATE == result)
     {
         LE_WARN("Key already exists! Nothing to do");
-        return LE_OK; // TBD: return error?
+        return LE_OK; // TBD: return and handle duplicate?
     }
-
-    // Use keyPtr to pass back Key ID. The key itself is stored inside IoT KeyStore
-    keyRef = iks_CreateKeyByType(keyId, IKS_KEY_TYPE_AES_GCM, 16); // TBD maybe 24 or 32
-    if (NULL == keyRef)
+    else if (IKS_OK != result)
     {
-        LE_ERROR("can't create key!");
+        LE_ERROR("Error creating key: %d", (int) result);
         return LE_FAULT;
     }
 
@@ -106,10 +103,10 @@ le_result_t iksCrypto_EncryptData
 
     // Get the actual key from the keystore.
     const char *keyId = (const char *) keyIdPtr;
-    keyRef = iks_GetKey(keyId);
-    if (NULL == keyRef)
+    result = iks_GetKey(keyId, &keyRef);
+    if (IKS_OK != result)
     {
-        LE_ERROR("can't find key in the KeyStore!");
+        LE_ERROR("Error getting key: %d", result);
         return LE_FAULT;
     }
 
@@ -128,15 +125,16 @@ le_result_t iksCrypto_EncryptData
     uint8_t* ciphertextPtr = tagPtr + IKS_AES_GCM_TAG_SIZE;
 
     // Create a session.
-    iks_Session_t sessionPtr = NULL;
+    iks_Session_t sessionRef;
 
-    sessionPtr = iks_CreateSession(keyRef);
-    if (NULL == sessionPtr)
+    result = iks_CreateSession(keyRef, &sessionRef);
+    if (IKS_OK != result)
     {
-        LE_ERROR("Can't create session");
+        LE_ERROR("Error creating session: %d", result);
         return LE_FAULT;
     }
-    result = iks_aesGcm_StartEncrypt(sessionPtr, noncePtr);
+
+    result = iks_aesGcm_StartEncrypt(sessionRef, noncePtr);
     if (IKS_OK != result)
     {
         LE_ERROR("StartEncrypt failed, %d", result);
@@ -152,7 +150,7 @@ le_result_t iksCrypto_EncryptData
         {
             currentSize = CHUNK_SIZE;
         }
-        result = iks_aesGcm_Encrypt(sessionPtr,
+        result = iks_aesGcm_Encrypt(sessionRef,
                                     plainData + (i * CHUNK_SIZE),
                                     ciphertextPtr + (i * CHUNK_SIZE),
                                     currentSize);
@@ -166,7 +164,7 @@ le_result_t iksCrypto_EncryptData
     while ((i * CHUNK_SIZE) < plainDataSize);
 
     // Finalize encryption
-    result = iks_aesGcm_DoneEncrypt(sessionPtr, tagPtr);
+    result = iks_aesGcm_DoneEncrypt(sessionRef, tagPtr, IKS_AES_GCM_TAG_SIZE);
     if (IKS_OK != result)
     {
         LE_ERROR("DoneEncrypt failed, %d", result);
@@ -174,13 +172,10 @@ le_result_t iksCrypto_EncryptData
     }
 
 out:
-    if (NULL != sessionPtr)
+    if (IKS_OK != iks_DeleteSession(sessionRef))
     {
-        result = iks_DeleteSession(sessionPtr);
-        if (IKS_OK != result)
-        {
-            LE_ERROR("DeleteSession failed, %d", result);
-        }
+        LE_ERROR("Error deleting session");
+        return LE_FAULT;
     }
 
     return (IKS_OVERFLOW == result) ? LE_OVERFLOW :
@@ -213,12 +208,15 @@ le_result_t iksCrypto_DecryptData
 
     // Get the actual key from the keystore.
     const char *keyId = (const char *) keyIdPtr;
-    keyRef = iks_GetKey(keyId);
-    if (NULL == keyRef)
+    result = iks_GetKey(keyId, &keyRef);
+    if (IKS_OK != result)
     {
-        LE_ERROR("can't find key in the KeyStore!");
+        LE_ERROR("Error getting key: %d", result);
         return LE_FAULT;
     }
+
+    // Sanity-check encrypted buffer size
+    LE_ASSERT(encryptedDataSize >= IKS_AES_GCM_NONCE_SIZE + IKS_AES_GCM_TAG_SIZE);
 
     // Calculate the decrypted data size, and check whether it fits in the buffer
     size_t decryptedSize = encryptedDataSize - IKS_AES_GCM_NONCE_SIZE - IKS_AES_GCM_TAG_SIZE;
@@ -235,15 +233,16 @@ le_result_t iksCrypto_DecryptData
     uint8_t* ciphertextPtr = tagPtr + IKS_AES_GCM_TAG_SIZE;
 
     // Create a session.
-    iks_Session_t sessionPtr = NULL;
+    iks_Session_t sessionRef;
 
-    sessionPtr = iks_CreateSession(keyRef);
-    if (NULL == sessionPtr)
+    result = iks_CreateSession(keyRef, &sessionRef);
+    if (IKS_OK != result)
     {
-        LE_ERROR("Can't create session");
+        LE_ERROR("Error creating session: %d", result);
         return LE_FAULT;
     }
-    result = iks_aesGcm_StartDecrypt(sessionPtr, noncePtr);
+
+    result = iks_aesGcm_StartDecrypt(sessionRef, noncePtr);
     if (IKS_OK != result)
     {
         LE_ERROR("StartDecrypt failed, %d", result);
@@ -259,7 +258,7 @@ le_result_t iksCrypto_DecryptData
         {
             currentSize = CHUNK_SIZE;
         }
-        result = iks_aesGcm_Decrypt(sessionPtr,
+        result = iks_aesGcm_Decrypt(sessionRef,
                                     ciphertextPtr + (i * CHUNK_SIZE),
                                     decryptedData + (i * CHUNK_SIZE),
                                     currentSize);
@@ -273,7 +272,7 @@ le_result_t iksCrypto_DecryptData
     while ((i * CHUNK_SIZE) < decryptedSize);
 
     // Finalize decryption
-    result = iks_aesGcm_DoneDecrypt(sessionPtr, tagPtr);
+    result = iks_aesGcm_DoneDecrypt(sessionRef, tagPtr, IKS_AES_GCM_TAG_SIZE);
     if (IKS_OK != result)
     {
         LE_ERROR("DoneDecrypt failed, %d", result);
@@ -281,13 +280,10 @@ le_result_t iksCrypto_DecryptData
     }
 
 out:
-    if (NULL != sessionPtr)
+    if (IKS_OK != iks_DeleteSession(sessionRef))
     {
-        result = iks_DeleteSession(sessionPtr);
-        if (IKS_OK != result)
-        {
-            LE_ERROR("DeleteSession failed, %d", result);
-        }
+        LE_ERROR("Error deleting session");
+        return LE_FAULT;
     }
 
     return (IKS_OVERFLOW == result) ? LE_OVERFLOW :
