@@ -9,7 +9,9 @@ cflags:
     -I${LEGATO_ROOT}/modules/IoTkeystore/iotKeyStore/pa/qtee/inc/
 }
 
+#if LE_CONFIG_LINUX
 ldflags:
 {
     -liotkeystore
 }
+#endif

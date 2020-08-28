@@ -44,8 +44,8 @@
 #include "pa_secStore.h"
 #include "trustZone.h"
 #include "iksCrypto.h"
-#include "fnmatch.h"
-#include <dlfcn.h>
+
+#include "sfsSecStore.h"
 
 
 //--------------------------------------------------------------------------------------------------
@@ -141,22 +141,6 @@ static le_mem_PoolRef_t KeyPool = NULL;
 
 //--------------------------------------------------------------------------------------------------
 /**
- * Path to modem secure storage PA library.
- */
-//--------------------------------------------------------------------------------------------------
-static const char ModemSecStorePAPath[] = "lib/libComponent_le_pa_secStore.so";
-
-
-//--------------------------------------------------------------------------------------------------
-/**
- * Pointer to modem secure storage PA (assuming modem PA exists).
- */
-//--------------------------------------------------------------------------------------------------
-static void* ModemSecStorePASoPtr;
-
-
-//--------------------------------------------------------------------------------------------------
-/**
  * Key object
  */
 //--------------------------------------------------------------------------------------------------
@@ -225,6 +209,59 @@ typedef void (*pa_secStore_GetEntry_t)
 
 //--------------------------------------------------------------------------------------------------
 /**
+ * Perform shell-gobbing style pattern matching
+ */
+//--------------------------------------------------------------------------------------------------
+static bool MatchPattern
+(
+    const char *pattern,           ///< [IN] Pattern to match
+    const char *str                ///< [IN] String to match against the pattern
+
+)
+{
+    while (*pattern && *str)
+    {
+        // For '*', match a run of characters
+        if (*pattern == '*')
+        {
+            while (*str)
+            {
+                if (pattern[1] != str[0])
+                {
+                    // If next character in pattern doesn't match next character in string,
+                    // move ahead in the string
+                    ++str;
+                }
+                else if (MatchPattern(&pattern[1], &str[0]))
+                {
+                    // If remainder of pattern matches remainder of string, return true
+                    return true;
+                }
+                else
+                {
+                    // Otherwise try again on the next character of the string
+                    ++str;
+                }
+            }
+        }
+        else if (*pattern == *str)
+        {
+            ++str;
+        }
+        else
+        {
+            break;
+        }
+
+        ++pattern;
+    }
+
+    return *pattern == *str;
+}
+
+
+//--------------------------------------------------------------------------------------------------
+/**
  * Determine the path type.
  */
 //--------------------------------------------------------------------------------------------------
@@ -238,7 +275,7 @@ static SfsPathType_t GetPathType
     int i = 0;
     for (i = 0; i < sfsPathSize; i++)
     {
-        if (fnmatch(SfsPaths[i].pattern, pathPtr, 0) == 0)
+        if (MatchPattern(SfsPaths[i].pattern, pathPtr))
         {
             return SfsPaths[i].type;
         }
@@ -267,6 +304,7 @@ static le_result_t GetApplicationName
 {
     le_result_t result = LE_NOT_FOUND;
     le_pathIter_Ref_t iteratorRef = le_pathIter_CreateForUnix(pathPtr);
+    int pathIterCount = 0;
 
     if (le_pathIter_IsEmpty(iteratorRef))
     {
@@ -277,7 +315,6 @@ static le_result_t GetApplicationName
     le_pathIter_GoToStart(iteratorRef);
 
     // Assume an application path is defined as the following: /sys/<index>/apps/<appName>
-    int pathIterCount = 0;
     do
     {
         char buffer[LIMIT_MAX_APP_NAME_BYTES] = { 0 };
@@ -332,15 +369,14 @@ static le_result_t GenerateKey
 )
 {
     // Open the sfs file.
-    FILE* fp = le_atomFile_CreateStream(KEY_FILE,
-                                      LE_FLOCK_READ_AND_APPEND,
-                                      LE_FLOCK_OPEN_IF_EXIST,
-                                      S_IRWXU,
-                                      NULL);
+    int fd = le_atomFile_Create(KEY_FILE,
+                                LE_FLOCK_READ_AND_APPEND,
+                                LE_FLOCK_OPEN_IF_EXIST,
+                                S_IRWXU);
 
-    if (fp == NULL)
+    if (fd < 0)
     {
-        le_atomFile_CancelStream(fp);
+        le_atomFile_Cancel(fd);
         LE_ERROR("Failed to open %s", KEY_FILE);
         return LE_FAULT;
     }
@@ -352,7 +388,7 @@ static le_result_t GenerateKey
     if (keyName)
     {
         // Write the path to the file.
-        if (fwrite(key->name, sizeof(char), sizeof(key->name), fp) != sizeof(key->name))
+        if (le_fd_Write(fd, key->name, sizeof(key->name)) != sizeof(key->name))
         {
             goto handleWriteError;
         }
@@ -371,12 +407,12 @@ static le_result_t GenerateKey
             goto handleWriteError;
         }
 
-        if (fwrite(&key->blobSize, sizeof(uint32_t), 1, fp) != 1)
+        if (le_fd_Write(fd, &key->blobSize, sizeof(uint32_t)) != sizeof(uint32_t))
         {
            goto handleWriteError;
         }
 
-        if (fwrite(key->blob, sizeof(uint8_t), sizeof(key->blob), fp) != sizeof(key->blob))
+        if (le_fd_Write(fd, key->blob, sizeof(key->blob)) != sizeof(key->blob))
         {
            goto handleWriteError;
         }
@@ -384,14 +420,14 @@ static le_result_t GenerateKey
         LE_DEBUG("Writing key [name: %s] [size: %d]", key->name, key->blobSize);
     }
 
-    le_atomFile_CloseStream(fp);
+    le_atomFile_Close(fd);
     le_hashmap_Put(KeyMap, key->name, key);
     return LE_OK;
 
 handleWriteError:
     LE_ERROR("Failed to write key data.");
     le_mem_Release(key);
-    le_atomFile_CancelStream(fp);
+    le_atomFile_Cancel(fd);
     return LE_FAULT;
 }
 
@@ -536,16 +572,15 @@ static le_result_t ImportKey
 )
 {
     // Check content of file
-    FILE* fp = le_atomFile_CreateStream(KEY_FILE,
-                                        LE_FLOCK_READ,
-                                        LE_FLOCK_OPEN_IF_EXIST,
-                                        S_IRWXU,
-                                        NULL);
+    int fd = le_atomFile_Create(KEY_FILE,
+                                LE_FLOCK_READ,
+                                LE_FLOCK_OPEN_IF_EXIST,
+                                S_IRWXU);
 
-    if (fp == NULL)
+    if (fd < 0)
     {
         LE_ERROR("Error opening keys.");
-        le_atomFile_CancelStream(fp);
+        le_atomFile_Cancel(fd);
         return LE_FAULT;
     }
 
@@ -556,19 +591,19 @@ static le_result_t ImportKey
     {
         key = le_mem_ForceAlloc(KeyPool);
         memset(key, 0, sizeof(*key));
-        dataRead = fread(key->name, sizeof(char), sizeof(key->name), fp);
+        dataRead = le_fd_Read(fd, key->name, sizeof(key->name));
         if (dataRead != sizeof(key->name))
         {
             goto handleReadError;
         }
 
-        dataRead = fread(&key->blobSize, sizeof(uint32_t), 1, fp);
-        if (dataRead != 1)
+        dataRead = le_fd_Read(fd, &key->blobSize, sizeof(uint32_t));
+        if (dataRead != sizeof(uint32_t))
         {
             goto handleReadError;
         }
 
-        dataRead = fread(key->blob, sizeof(uint8_t), sizeof(key->blob), fp);
+        dataRead = le_fd_Read(fd, key->blob, sizeof(key->blob));
         if (dataRead != sizeof(key->blob))
         {
             goto handleReadError;
@@ -590,13 +625,13 @@ handleReadError:
     if (dataRead == 0)
     {
         LE_DEBUG("Importing keys successful.");
-        le_atomFile_CloseStream(fp);
+        le_atomFile_Close(fd);
     }
     else
     {
         LE_DEBUG("Error reading keys.");
         le_mem_Release(key);
-        le_atomFile_CloseStream(fp);
+        le_atomFile_Close(fd);
         return LE_FAULT;
     }
 
@@ -726,28 +761,7 @@ static le_result_t ModemRead
 {
     LE_DEBUG("Reading from modem secure storage [%s]", pathPtr);
 
-    if (ModemSecStorePASoPtr == NULL)
-    {
-        ModemSecStorePASoPtr = dlopen(ModemSecStorePAPath, RTLD_LAZY);
-
-        if (NULL == ModemSecStorePASoPtr)
-        {
-            LE_ERROR("Could not open %s.", ModemSecStorePAPath);
-            LE_ERROR("%s", dlerror());
-            return LE_FAULT;
-        }
-    }
-
-    static int (*pa_secStore_Read)(const char*, uint8_t*, size_t*) = NULL;
-    pa_secStore_Read = dlsym(ModemSecStorePASoPtr, "pa_secStore_Read");
-    if (!pa_secStore_Read)
-    {
-        LE_WARN("Could not get function pa_secStoreModem_Read.");
-        LE_ERROR("%s", dlerror());
-        return LE_FAULT;
-    }
-
-    return pa_secStore_Read(pathPtr, bufPtr, bufSizePtr);
+    return sfsSecStore_Read(pathPtr, bufPtr, bufSizePtr);
 }
 
 
@@ -895,7 +909,7 @@ static le_result_t IteratePathSize
                                       ///       so we don't iterate the roots node siblings.
     size_t* totalSizePtr,             ///< [IN/OUT] Total size of all data under the specified
                                       ///           iterator. Ignored if NULL.
-    FILE* metaFilePtr                 ///< [IN/OUT] File to write meta data to. Ignored if NULL.
+    int metaFile                      ///< [IN] File to write meta data to. Ignored if -1.
 )
 {
     le_result_t result = LE_OK;
@@ -910,7 +924,7 @@ static le_result_t IteratePathSize
             // A stem node, recruse into the stem's sub-items.
             case LE_CFG_TYPE_STEM:
                 le_cfg_GoToFirstChild(iteratorRef);
-                result = IteratePathSize(iteratorRef, false, totalSizePtr, metaFilePtr);
+                result = IteratePathSize(iteratorRef, false, totalSizePtr, metaFile);
                 if (result != LE_OK)
                 {
                     return result;
@@ -1006,11 +1020,15 @@ static le_result_t IteratePathSize
                 }
 
                 LE_DEBUG("Path: %s [size: %d]", path, bufferSize);
-                if (NULL != metaFilePtr)
+                if (metaFile < 0)
                 {
+                    char buffer[16];
+
                     // meta data written in the way partially compatible with old "meta file":
                     // lines 1,3,5,.. contain path, lines 2,4,6,.. contain item size.
-                    fprintf(metaFilePtr, "%s\n%d\n", path, bufferSize);
+                    le_fd_Write(metaFile, path, strnlen(path, sizeof(path)));
+                    snprintf(buffer, sizeof(buffer), "\n%d\n", bufferSize);
+                    le_fd_Write(metaFile, buffer, strnlen(buffer, sizeof(buffer)));
                 }
                 if (NULL != totalSizePtr)
                 {
@@ -1060,7 +1078,7 @@ static le_result_t GetSize
     }
     else
     {
-        result = IteratePathSize(iteratorRef, true, sizePtr, NULL);
+        result = IteratePathSize(iteratorRef, true, sizePtr, -1);
     }
 
     le_cfg_CancelTxn(iteratorRef);
@@ -1086,30 +1104,7 @@ static le_result_t ModemCopyMetaTo
 {
     LE_DEBUG("Copy meta data from modem secure storage [%s]", pathPtr);
 
-    // never loaded
-    if (ModemSecStorePASoPtr == NULL)
-    {
-        ModemSecStorePASoPtr = dlopen(ModemSecStorePAPath, RTLD_LAZY);
-
-        // try loading
-        if (NULL == ModemSecStorePASoPtr)
-        {
-            LE_ERROR("Could not open %s.", ModemSecStorePAPath);
-            LE_ERROR("%s", dlerror());
-            return LE_FAULT;
-        }
-    }
-
-    static int (*pa_secStore_CopyMetaTo)(const char*) = NULL;
-    pa_secStore_CopyMetaTo = dlsym(ModemSecStorePASoPtr, "pa_secStore_CopyMetaTo");
-    if (!pa_secStore_CopyMetaTo)
-    {
-        LE_WARN("Could not get function pa_secStore_Write.");
-        LE_ERROR("%s", dlerror());
-        return LE_FAULT;
-    }
-
-    return pa_secStore_CopyMetaTo(pathPtr);
+    return sfsSecStore_CopyMetaTo(pathPtr);
 }
 
 
@@ -1121,6 +1116,7 @@ static le_result_t ModemCopyMetaTo
  *
  * @return
  *      LE_OK if successful.
+ *      LE_FAULT if an error occured reading from the file.
  *      LE_OVERFLOW if the buffer is too small.  As much of the line as possible will be copied to
  *                  buf.
  *      LE_OUT_OF_RANGE if there is nothing else to read from the file.
@@ -1128,28 +1124,51 @@ static le_result_t ModemCopyMetaTo
 //--------------------------------------------------------------------------------------------------
 static le_result_t ReadLine
 (
-    FILE* streamPtr,            ///< [IN] Stream to read from.
+    int fd,                     ///< [IN] File descriptor to read from.
     char* bufPtr,               ///< [OUT] Buffer to store the line in.
     size_t bufSize              ///< [IN] Buffer size.
 )
 {
-    char localBuf[bufSize + 1];
+    char *startBufPtr = bufPtr;
+    char nextChar = '\0';
+    ssize_t readCount = -1;
 
-    if (fgets(localBuf, sizeof(localBuf), streamPtr) == NULL)
+    while (bufSize > 1)
     {
-        return LE_OUT_OF_RANGE;
+        readCount = le_fd_Read(fd, &nextChar, 1);
+
+        if (!readCount)
+        {
+            if (startBufPtr == bufPtr)
+            {
+                return LE_OUT_OF_RANGE;
+            }
+            else
+            {
+                return LE_OK;
+            }
+        }
+        else if (readCount < 0)
+        {
+            return LE_FAULT;
+        }
+
+        switch (nextChar)
+        {
+            case '\0':
+            case '\n':
+                *bufPtr = '\0';
+                return LE_OK;
+            default:
+                *bufPtr = nextChar;
+                bufPtr++;
+                bufSize--;
+        }
     }
 
-    // Remove the trailing newline char.
-    size_t len = strlen(localBuf);
-
-    if (localBuf[len - 1] == '\n')
-    {
-        localBuf[len - 1] = '\0';
-    }
-
-    // Copy the buffer into the user buffer.
-    return le_utf8_Copy(bufPtr, localBuf, bufSize, NULL);
+    // Reached the end of the buffer without reading the end of the line.
+    *bufPtr = '\0';
+    return LE_OVERFLOW;
 }
 
 
@@ -1170,20 +1189,20 @@ static le_result_t CopySfsFromMeta
 )
 {
     // Read the file to get the meta data.
-    FILE* filePtr;
+    int file = -1;
     le_result_t result = LE_OK;
 
     do
     {
-        filePtr = le_atomFile_OpenStream(metaFilePtr, LE_FLOCK_READ, NULL);
+        file = le_atomFile_Open(metaFilePtr, LE_FLOCK_READ);
     }
-    while ((filePtr == NULL) && (errno == EINTR));
+    while ((file < 0) && (errno == EINTR));
 
     // If file doesn't exist
-    if (filePtr == NULL)
+    if (file < 0)
     {
-        LE_ERROR("Meta file %s does not exist.  %m.", metaFilePtr);
-        le_atomFile_CancelStream(filePtr);
+        LE_ERROR("Meta file %s does not exist.  (errno=%d)", metaFilePtr, errno);
+        le_atomFile_Cancel(file);
         return LE_FAULT;
     }
 
@@ -1193,22 +1212,22 @@ static le_result_t CopySfsFromMeta
         // Read the path.
         char path[SECSTOREADMIN_MAX_PATH_BYTES];
 
-        result = ReadLine(filePtr, path, sizeof(path));
+        result = ReadLine(file, path, sizeof(path));
 
         if (result == LE_OUT_OF_RANGE)
         {
             break;
         }
 
-        if (result == LE_OVERFLOW)
+        if (result != LE_OK)
         {
-            LE_CRIT("Item path '%s...' is too long.", path);
+            LE_CRIT("Error (%d) reading '%s...'.", result, path);
             goto handleMetaCorruption;
         }
 
         // Read the sfs name
         char sfsName[LE_SECSTORE_MAX_NAME_BYTES];
-        result = ReadLine(filePtr, sfsName, sizeof(sfsName));
+        result = ReadLine(file, sfsName, sizeof(sfsName));
 
         if (result != LE_OK)
         {
@@ -1259,13 +1278,13 @@ static le_result_t CopySfsFromMeta
         LE_DEBUG("Migrated [%s] successfully to new SFS.", path);
     }
 
-    le_atomFile_CloseStream(filePtr);
+    le_atomFile_Close(file);
 
     return LE_OK;
 
 handleMetaCorruption:
     LE_ERROR("Meta data import failed");
-    le_atomFile_CancelStream(filePtr);
+    le_atomFile_Cancel(file);
 
     return LE_FAULT;
 }
@@ -1499,9 +1518,9 @@ le_result_t pa_secStore_CopyMetaTo
 )
 {
     le_result_t result = LE_OK;
-    FILE *destFilePtr = le_atomFile_CreateStream(pathPtr, LE_FLOCK_WRITE, LE_FLOCK_REPLACE_IF_EXIST,
-                                                 S_IRWXU, NULL);
-    if (NULL == destFilePtr)
+    int destFile = le_atomFile_Create(pathPtr, LE_FLOCK_WRITE, LE_FLOCK_REPLACE_IF_EXIST,
+                                      S_IRWXU);
+    if (destFile < 0)
     {
         return LE_NOT_FOUND;
     }
@@ -1514,11 +1533,11 @@ le_result_t pa_secStore_CopyMetaTo
     }
     else
     {
-        result = IteratePathSize(iteratorRef, true, NULL, destFilePtr);
+        result = IteratePathSize(iteratorRef, true, NULL, destFile);
     }
 
     le_cfg_CancelTxn(iteratorRef);
-    le_atomFile_CloseStream(destFilePtr);
+    le_atomFile_Close(destFile);
 
     return result;
 }
@@ -1841,7 +1860,7 @@ static le_result_t IteratePathCopy
                                            LE_CFG_STR_LEN_BYTES,
                                            destPathPtr,
                                            &(path[strlen(srcPathPtr)]),
-                                           NULL) != LE_OK,
+                                           (void *)NULL) != LE_OK,
                                            "Dest path '%s' is too long.", destPath);
 
                 uint8_t encryptedData[MAX_ENCRYPTED_DATA_BYTES];

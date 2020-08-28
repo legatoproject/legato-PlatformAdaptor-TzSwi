@@ -123,6 +123,7 @@ le_result_t iksCrypto_EncryptData
     uint8_t* noncePtr = encryptedData;
     uint8_t* tagPtr = noncePtr + IKS_AES_GCM_NONCE_SIZE;
     uint8_t* ciphertextPtr = tagPtr + IKS_AES_GCM_TAG_SIZE;
+    int i = 0;
 
     // Create a session.
     iks_Session_t sessionRef;
@@ -142,7 +143,6 @@ le_result_t iksCrypto_EncryptData
     }
 
     // Splitting buffer into chunks (if necessary)
-    int i = 0;
     do
     {
         size_t currentSize = plainDataSize - (i * CHUNK_SIZE);
@@ -231,6 +231,7 @@ le_result_t iksCrypto_DecryptData
     uint8_t* noncePtr = encryptedData;
     uint8_t* tagPtr = noncePtr + IKS_AES_GCM_NONCE_SIZE;
     uint8_t* ciphertextPtr = tagPtr + IKS_AES_GCM_TAG_SIZE;
+    int i = 0;
 
     // Create a session.
     iks_Session_t sessionRef;
@@ -250,7 +251,6 @@ le_result_t iksCrypto_DecryptData
     }
 
     // Splitting buffer into chunks (if necessary)
-    int i = 0;
     do
     {
         size_t currentSize = decryptedSize - (i * CHUNK_SIZE);
