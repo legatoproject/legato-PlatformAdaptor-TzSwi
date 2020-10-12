@@ -1499,7 +1499,7 @@ le_result_t pa_secStore_Read
         size_t bufSizeBackup = *bufSizePtr;
         result = Read(appName, pathPtr, bufPtr, bufSizePtr);
 
-        if ((result == LE_OK) && ((*bufSizePtr) > 0))
+        if (result == LE_OK)
         {
             return result;
         }
@@ -1507,10 +1507,6 @@ le_result_t pa_secStore_Read
         {
             // Unsuccessful TrustZone read may have changed the output buffer size, so it needs
             // to be restored to its original value
-            if(!(*bufSizePtr))
-            {
-                LE_WARN("Credential len from TZ = 0");
-            }
             *bufSizePtr = bufSizeBackup;
             result = ModemRead(pathPtr, bufPtr, bufSizePtr);
 
