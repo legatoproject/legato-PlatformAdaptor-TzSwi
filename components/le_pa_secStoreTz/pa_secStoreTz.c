@@ -1046,7 +1046,7 @@ static le_result_t IteratePathSize
                 }
 
                 LE_DEBUG("Path: %s [size: %d]", path, bufferSize);
-                if (metaFile < 0)
+                if (metaFile > 0)
                 {
                     char buffer[16];
 
