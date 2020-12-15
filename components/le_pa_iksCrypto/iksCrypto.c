@@ -77,6 +77,60 @@ le_result_t iksCrypto_GenerateKey
     return LE_OK;
 }
 
+/**-----------------------------------------------------------------------------------------------
+ *
+ * Retrieve a key from IoT Keystore (or from the locally cached copy) for the given Key ID.
+ *
+ * @return
+ *      - true on success.
+ *      - false on failure.
+ */
+//--------------------------------------------------------------------------------------------------
+static bool GetKey
+(
+    uint8_t* keyIdPtr,          ///< [IN] Key ID.
+    iks_KeyRef_t* keyRefPtr     ///< [OUT] Key reference.
+)
+{
+    const char *keyId = (const char *) keyIdPtr;
+
+#if LE_CONFIG_LINUX
+    // If memory allows, try to re-use the last accessed key,
+    // to skip the IKS key lookup.
+    static char KeyIdCache[IKS_MAX_IDENTIFIER_SIZE] = {0};
+    static iks_KeyRef_t KeyRefCache = NULL;
+
+    if ((NULL != KeyRefCache) &&
+        (0 == strncmp(KeyIdCache, keyId, sizeof(KeyIdCache))))
+    {
+        *keyRefPtr = KeyRefCache;
+        return true;
+    }
+#endif
+
+    // Just get the actual key from the keystore.
+    iks_result_t iksRc = iks_GetKey(keyId, keyRefPtr);
+
+    if (IKS_OK != iksRc)
+    {
+        LE_ERROR("Error getting key: %d", iksRc);
+        return false;
+    }
+
+#if LE_CONFIG_LINUX
+    // Update the cached key
+    if (LE_OK != le_utf8_Copy(KeyIdCache, keyId, sizeof(KeyIdCache), NULL))
+    {
+        LE_ERROR("Key ID cache overflow");
+    }
+    else
+    {
+        KeyRefCache = *keyRefPtr;
+    }
+#endif
+
+    return true;
+}
 
 /**-----------------------------------------------------------------------------------------------
  *
@@ -101,12 +155,9 @@ le_result_t iksCrypto_EncryptData
     iks_KeyRef_t keyRef;
     iks_result_t result;
 
-    // Get the actual key from the keystore.
-    const char *keyId = (const char *) keyIdPtr;
-    result = iks_GetKey(keyId, &keyRef);
-    if (IKS_OK != result)
+    if (!GetKey(keyIdPtr, &keyRef))
     {
-        LE_ERROR("Error getting key: %d", result);
+        LE_ERROR("Error getting key '%s'", (char *) keyIdPtr);
         return LE_FAULT;
     }
 
@@ -123,59 +174,82 @@ le_result_t iksCrypto_EncryptData
     uint8_t* noncePtr = encryptedData;
     uint8_t* tagPtr = noncePtr + IKS_AES_GCM_NONCE_SIZE;
     uint8_t* ciphertextPtr = tagPtr + IKS_AES_GCM_TAG_SIZE;
-    int i = 0;
+    iks_Session_t sessionRef = NULL;
 
-    // Create a session.
-    iks_Session_t sessionRef;
-
-    result = iks_CreateSession(keyRef, &sessionRef);
-    if (IKS_OK != result)
+    // if data size allows, use "packet API" to reduce number of calls to iks_ library
+    if (plainDataSize <= CHUNK_SIZE)
     {
-        LE_ERROR("Error creating session: %d", result);
-        return LE_FAULT;
-    }
-
-    result = iks_aesGcm_StartEncrypt(sessionRef, noncePtr);
-    if (IKS_OK != result)
-    {
-        LE_ERROR("StartEncrypt failed, %d", result);
-        goto out;
-    }
-
-    // Splitting buffer into chunks (if necessary)
-    do
-    {
-        size_t currentSize = plainDataSize - (i * CHUNK_SIZE);
-        if (currentSize > CHUNK_SIZE)
-        {
-            currentSize = CHUNK_SIZE;
-        }
-        result = iks_aesGcm_Encrypt(sessionRef,
-                                    plainData + (i * CHUNK_SIZE),
-                                    ciphertextPtr + (i * CHUNK_SIZE),
-                                    currentSize);
+        result = iks_aesGcm_EncryptPacket(keyRef,
+                                          noncePtr,
+                                          NULL,
+                                          0,
+                                          plainData,
+                                          ciphertextPtr,
+                                          plainDataSize,
+                                          tagPtr,
+                                          IKS_AES_GCM_TAG_SIZE);
         if (IKS_OK != result)
         {
-            LE_ERROR("Encrypt failed, %d", result);
+            LE_ERROR("EncryptPacket failed, %d", result);
             goto out;
         }
-        i++;
     }
-    while ((i * CHUNK_SIZE) < plainDataSize);
-
-    // Finalize encryption
-    result = iks_aesGcm_DoneEncrypt(sessionRef, tagPtr, IKS_AES_GCM_TAG_SIZE);
-    if (IKS_OK != result)
+    else // data is too big to be processed as a single packet - use "streaming API"
     {
-        LE_ERROR("DoneEncrypt failed, %d", result);
-        goto out;
+        int i = 0;
+
+        result = iks_CreateSession(keyRef, &sessionRef);
+        if (IKS_OK != result)
+        {
+            LE_ERROR("Error creating session: %d", result);
+            return LE_FAULT;
+        }
+
+        result = iks_aesGcm_StartEncrypt(sessionRef, noncePtr);
+        if (IKS_OK != result)
+        {
+            LE_ERROR("StartEncrypt failed, %d", result);
+            goto out;
+        }
+
+        // Splitting buffer into chunks (if necessary)
+        do
+        {
+            size_t currentSize = plainDataSize - (i * CHUNK_SIZE);
+            if (currentSize > CHUNK_SIZE)
+            {
+                currentSize = CHUNK_SIZE;
+            }
+            result = iks_aesGcm_Encrypt(sessionRef,
+                                        plainData + (i * CHUNK_SIZE),
+                                        ciphertextPtr + (i * CHUNK_SIZE),
+                                        currentSize);
+            if (IKS_OK != result)
+            {
+                LE_ERROR("Encrypt failed, %d", result);
+                goto out;
+            }
+            i++;
+        }
+        while ((i * CHUNK_SIZE) < plainDataSize);
+
+        // Finalize encryption
+        result = iks_aesGcm_DoneEncrypt(sessionRef, tagPtr, IKS_AES_GCM_TAG_SIZE);
+        if (IKS_OK != result)
+        {
+            LE_ERROR("DoneEncrypt failed, %d", result);
+            goto out;
+        }
     }
 
 out:
-    if (IKS_OK != iks_DeleteSession(sessionRef))
+    if (NULL != sessionRef)
     {
-        LE_ERROR("Error deleting session");
-        return LE_FAULT;
+        if (IKS_OK != iks_DeleteSession(sessionRef))
+        {
+            LE_ERROR("Error deleting session");
+            return LE_FAULT;
+        }
     }
 
     return (IKS_OVERFLOW == result) ? LE_OVERFLOW :
@@ -206,12 +280,9 @@ le_result_t iksCrypto_DecryptData
     iks_KeyRef_t keyRef;
     iks_result_t result;
 
-    // Get the actual key from the keystore.
-    const char *keyId = (const char *) keyIdPtr;
-    result = iks_GetKey(keyId, &keyRef);
-    if (IKS_OK != result)
+    if (!GetKey(keyIdPtr, &keyRef))
     {
-        LE_ERROR("Error getting key: %d", result);
+        LE_ERROR("Error getting key '%s'", (char *) keyIdPtr);
         return LE_FAULT;
     }
 
@@ -231,59 +302,81 @@ le_result_t iksCrypto_DecryptData
     uint8_t* noncePtr = encryptedData;
     uint8_t* tagPtr = noncePtr + IKS_AES_GCM_NONCE_SIZE;
     uint8_t* ciphertextPtr = tagPtr + IKS_AES_GCM_TAG_SIZE;
-    int i = 0;
+    iks_Session_t sessionRef = NULL;
 
-    // Create a session.
-    iks_Session_t sessionRef;
-
-    result = iks_CreateSession(keyRef, &sessionRef);
-    if (IKS_OK != result)
+    // if data size allows, use "packet API" to reduce number of calls to iks_ library
+    if (decryptedSize <= CHUNK_SIZE)
     {
-        LE_ERROR("Error creating session: %d", result);
-        return LE_FAULT;
-    }
-
-    result = iks_aesGcm_StartDecrypt(sessionRef, noncePtr);
-    if (IKS_OK != result)
-    {
-        LE_ERROR("StartDecrypt failed, %d", result);
-        goto out;
-    }
-
-    // Splitting buffer into chunks (if necessary)
-    do
-    {
-        size_t currentSize = decryptedSize - (i * CHUNK_SIZE);
-        if (currentSize > CHUNK_SIZE)
-        {
-            currentSize = CHUNK_SIZE;
-        }
-        result = iks_aesGcm_Decrypt(sessionRef,
-                                    ciphertextPtr + (i * CHUNK_SIZE),
-                                    decryptedData + (i * CHUNK_SIZE),
-                                    currentSize);
+        result = iks_aesGcm_DecryptPacket(keyRef,
+                                          noncePtr,
+                                          NULL,
+                                          0,
+                                          ciphertextPtr,
+                                          decryptedData,
+                                          decryptedSize,
+                                          tagPtr,
+                                          IKS_AES_GCM_TAG_SIZE);
         if (IKS_OK != result)
         {
-            LE_ERROR("Decrypt failed, %d", result);
+            LE_ERROR("DecryptPacket failed, %d", result);
             goto out;
         }
-        i++;
     }
-    while ((i * CHUNK_SIZE) < decryptedSize);
-
-    // Finalize decryption
-    result = iks_aesGcm_DoneDecrypt(sessionRef, tagPtr, IKS_AES_GCM_TAG_SIZE);
-    if (IKS_OK != result)
+    else // data is too big to be processed as a single packet - use "streaming API"
     {
-        LE_ERROR("DoneDecrypt failed, %d", result);
-        goto out;
+        int i = 0;
+        result = iks_CreateSession(keyRef, &sessionRef);
+        if (IKS_OK != result)
+        {
+            LE_ERROR("Error creating session: %d", result);
+            return LE_FAULT;
+        }
+
+        result = iks_aesGcm_StartDecrypt(sessionRef, noncePtr);
+        if (IKS_OK != result)
+        {
+            LE_ERROR("StartDecrypt failed, %d", result);
+            goto out;
+        }
+
+        // Splitting buffer into chunks (if necessary)
+        do
+        {
+            size_t currentSize = decryptedSize - (i * CHUNK_SIZE);
+            if (currentSize > CHUNK_SIZE)
+            {
+                currentSize = CHUNK_SIZE;
+            }
+            result = iks_aesGcm_Decrypt(sessionRef,
+                                        ciphertextPtr + (i * CHUNK_SIZE),
+                                        decryptedData + (i * CHUNK_SIZE),
+                                        currentSize);
+            if (IKS_OK != result)
+            {
+                LE_ERROR("Decrypt failed, %d", result);
+                goto out;
+            }
+            i++;
+        }
+        while ((i * CHUNK_SIZE) < decryptedSize);
+
+        // Finalize decryption
+        result = iks_aesGcm_DoneDecrypt(sessionRef, tagPtr, IKS_AES_GCM_TAG_SIZE);
+        if (IKS_OK != result)
+        {
+            LE_ERROR("DoneDecrypt failed, %d", result);
+            goto out;
+        }
     }
 
 out:
-    if (IKS_OK != iks_DeleteSession(sessionRef))
+    if (NULL != sessionRef)
     {
-        LE_ERROR("Error deleting session");
-        return LE_FAULT;
+        if (IKS_OK != iks_DeleteSession(sessionRef))
+        {
+            LE_ERROR("Error deleting session");
+            return LE_FAULT;
+        }
     }
 
     return (IKS_OVERFLOW == result) ? LE_OVERFLOW :
