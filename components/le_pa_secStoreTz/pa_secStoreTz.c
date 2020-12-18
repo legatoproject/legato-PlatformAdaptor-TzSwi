@@ -966,8 +966,10 @@ static le_result_t IteratePathSize
                 break;
             default:
                 le_cfg_GetPath(iteratorRef, "", path, sizeof(path));
-
-                encryptedData = le_mem_ForceAlloc(EncryptedBufferPool);
+                if (!encryptedData)
+                {
+                    encryptedData = le_mem_ForceAlloc(EncryptedBufferPool);
+                }
                 uint32_t encryptedDataSize = MAX_ENCRYPTED_DATA_BYTES;
                 uint8_t byte = 0;
 
@@ -984,7 +986,10 @@ static le_result_t IteratePathSize
                     goto exit;
                 }
 
-                buffer = le_mem_ForceAlloc(EncryptedBufferPool);
+                if (!buffer)
+                {
+                    buffer = le_mem_ForceAlloc(EncryptedBufferPool);
+                }
                 uint32_t bufferSize = MAX_ENCRYPTED_DATA_BYTES;
 
                 // Manage case where the data is empty
@@ -1899,7 +1904,11 @@ static le_result_t IteratePathCopy
                                            (void *)NULL) != LE_OK,
                                            "Dest path '%s' is too long.", destPath);
 
-                encryptedData = le_mem_ForceAlloc(EncryptedBufferPool);
+                if (!encryptedData)
+                {
+                    encryptedData = le_mem_ForceAlloc(EncryptedBufferPool);
+                }
+
                 uint32_t encryptedDataSize = MAX_ENCRYPTED_DATA_BYTES;
                 uint8_t byte = 0;
 
