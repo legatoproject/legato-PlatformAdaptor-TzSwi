@@ -91,7 +91,13 @@
  * Index of the application name
  */
 //--------------------------------------------------------------------------------------------------
+#ifdef LE_CONFIG_LINUX
 #define PATH_APP_NAME_INDEX         3
+#elif LE_CONFIG_TARGET_GILL
+#define PATH_APP_NAME_INDEX         1
+#else
+#error "Target not supported"
+#endif
 
 
 //--------------------------------------------------------------------------------------------------
@@ -178,43 +184,53 @@ Key_t;
 
 //--------------------------------------------------------------------------------------------------
 /**
- * SFS Path types.
+ * Path types.
  */
 //--------------------------------------------------------------------------------------------------
 typedef enum {
-    SFS_PATH_TYPE_PATH = 0x0,        ///< A path.
-    SFS_PATH_TYPE_APP_PATH = 0x1,    ///< A path that belongs to an app.
-    SFS_PATH_TYPE_AVMS_PATH = 0x2,   ///< A path that belongs specifically for avms.
+    PATH_TYPE_PATH = 0x0,        ///< A path.
+    PATH_TYPE_APP_PATH = 0x1,    ///< A path that belongs to an app.
+    PATH_TYPE_AVMS_PATH = 0x2,   ///< A path that belongs specifically for avms.
 }
-SfsPathType_t;
+PathType_t;
 
 
 //--------------------------------------------------------------------------------------------------
 /**
- * SFS Path object.
+ * Path Class
  */
 //--------------------------------------------------------------------------------------------------
 typedef struct {
     char pattern[LIMIT_MAX_APP_NAME_BYTES];
-    SfsPathType_t type;
+    PathType_t type;
 }
-SfsPath_t;
+PathClass_t;
 
 
 //--------------------------------------------------------------------------------------------------
 /**
- * SFS Paths pattern match. Used to determine how we manage different paths.
+ * Paths pattern match. Used to determine how we manage different paths.
  */
 //--------------------------------------------------------------------------------------------------
-static SfsPath_t SfsPaths[] = {
-    { "/sys/*/apps/avcService/avms/LWM2M_BOOTSTRAP*", SFS_PATH_TYPE_AVMS_PATH },
-    { "/sys/*/apps/avcService/avms/LWM2M_FW_KEY", SFS_PATH_TYPE_AVMS_PATH },
-    { "/sys/*/apps/avcService/avms/LWM2M_SW_KEY", SFS_PATH_TYPE_AVMS_PATH },
-    { "/sys/*/apps/avcService/avms/certificate", SFS_PATH_TYPE_AVMS_PATH },
-    { "/sys/*/apps/avcService/avms/bs_server_public_key", SFS_PATH_TYPE_AVMS_PATH },
-    { "/sys/*/apps/*", SFS_PATH_TYPE_APP_PATH }
+static const PathClass_t PathClasses[] = {
+#ifdef LE_CONFIG_LINUX
+    { "/sys/*/apps/avcService/avms/LWM2M_BOOTSTRAP*", PATH_TYPE_AVMS_PATH },
+    { "/sys/*/apps/avcService/avms/LWM2M_FW_KEY", PATH_TYPE_AVMS_PATH },
+    { "/sys/*/apps/avcService/avms/LWM2M_SW_KEY", PATH_TYPE_AVMS_PATH },
+    { "/sys/*/apps/avcService/avms/certificate", PATH_TYPE_AVMS_PATH },
+    { "/sys/*/apps/avcService/avms/bs_server_public_key", PATH_TYPE_AVMS_PATH },
+    { "/sys/*/apps/*", PATH_TYPE_APP_PATH }
+#elif LE_CONFIG_TARGET_GILL
+    { "avcService/avms/LWM2M_BOOTSTRAP*", PATH_TYPE_AVMS_PATH },
+    { "avcService/avms/LWM2M_FW_KEY", PATH_TYPE_AVMS_PATH },
+    { "avcService/avms/LWM2M_SW_KEY", PATH_TYPE_AVMS_PATH },
+    { "avcService/avms/certificate", PATH_TYPE_AVMS_PATH },
+    { "avcService/avms/bs_server_public_key", PATH_TYPE_AVMS_PATH },
+    { "*", PATH_TYPE_APP_PATH }
+#else
+#error "Target not supported"
+#endif
 };
-
 
 //--------------------------------------------------------------------------------------------------
 /**
@@ -289,23 +305,23 @@ static bool MatchPattern
  * Determine the path type.
  */
 //--------------------------------------------------------------------------------------------------
-static SfsPathType_t GetPathType
+static PathType_t GetPathType
 (
     const char* pathPtr
 )
 {
-    size_t sfsPathSize = sizeof(SfsPaths) / sizeof(SfsPaths[0]);
+    size_t classCnt = sizeof(PathClasses) / sizeof(PathClasses[0]);
 
     int i = 0;
-    for (i = 0; i < sfsPathSize; i++)
+    for (i = 0; i < classCnt; i++)
     {
-        if (MatchPattern(SfsPaths[i].pattern, pathPtr))
+        if (MatchPattern(PathClasses[i].pattern, pathPtr))
         {
-            return SfsPaths[i].type;
+            return PathClasses[i].type;
         }
     }
 
-    return SFS_PATH_TYPE_PATH;
+    return PATH_TYPE_PATH;
 }
 
 
@@ -338,7 +354,8 @@ static le_result_t GetApplicationName
 
     le_pathIter_GoToStart(iteratorRef);
 
-    // Assume an application path is defined as the following: /sys/<index>/apps/<appName>
+    // Assume the path contains app name at a certain position, depending on platform
+    // and defined by PATH_APP_NAME_INDEX
     do
     {
         char buffer[LIMIT_MAX_APP_NAME_BYTES] = { 0 };
@@ -1001,9 +1018,9 @@ static le_result_t IteratePathSize
                 {
                     // Identify key name for this path
                     char keyName[LIMIT_MAX_APP_NAME_BYTES];
-                    SfsPathType_t type = GetPathType(path);
-                    if ((type == SFS_PATH_TYPE_AVMS_PATH) ||
-                        (type == SFS_PATH_TYPE_APP_PATH))
+                    PathType_t type = GetPathType(path);
+                    if ((type == PATH_TYPE_AVMS_PATH) ||
+                        (type == PATH_TYPE_APP_PATH))
                     {
                         result = GetApplicationName(path, keyName, sizeof(keyName));
 
@@ -1293,8 +1310,8 @@ static le_result_t CopySfsFromMeta
         }
 
         char appName[LIMIT_MAX_APP_NAME_BYTES];
-        SfsPathType_t type = GetPathType(path);
-        if (type == SFS_PATH_TYPE_APP_PATH)
+        PathType_t type = GetPathType(path);
+        if (type == PATH_TYPE_APP_PATH)
         {
             result = GetApplicationName(path, appName, sizeof(appName));
 
@@ -1435,11 +1452,11 @@ le_result_t pa_secStore_Write
     }
 
     char appName[LIMIT_MAX_APP_NAME_BYTES];
-    SfsPathType_t type = GetPathType(pathPtr);
+    PathType_t type = GetPathType(pathPtr);
 
     // Access the modem for AVMS use cases
-    if ((type == SFS_PATH_TYPE_AVMS_PATH) ||
-        (type == SFS_PATH_TYPE_APP_PATH))
+    if ((type == PATH_TYPE_AVMS_PATH) ||
+        (type == PATH_TYPE_APP_PATH))
     {
         result = GetApplicationName(pathPtr, appName, sizeof(appName));
 
@@ -1488,11 +1505,11 @@ le_result_t pa_secStore_Read
     }
 
     char appName[LIMIT_MAX_APP_NAME_BYTES];
-    SfsPathType_t type = GetPathType(pathPtr);
+    PathType_t type = GetPathType(pathPtr);
 
     // In the case where the path is avms, we will try reading from trustzone first.
     // If it does not exist, we will copy it from the modem sfs.
-    if (type == SFS_PATH_TYPE_AVMS_PATH)
+    if (type == PATH_TYPE_AVMS_PATH)
     {
         result = GetApplicationName(pathPtr, appName, sizeof(appName));
 
@@ -1510,6 +1527,7 @@ le_result_t pa_secStore_Read
         }
         else
         {
+            LE_INFO("TrustZone read failed... Attempting to read from modem");
             // Unsuccessful TrustZone read may have changed the output buffer size, so it needs
             // to be restored to its original value
             *bufSizePtr = bufSizeBackup;
@@ -1517,13 +1535,14 @@ le_result_t pa_secStore_Read
 
             if (result != LE_OK)
             {
+                LE_ERROR("Reading from modem failed");
                 return result;
             }
 
             return Write(appName, pathPtr, bufPtr, *bufSizePtr, false, NULL);
         }
     }
-    else if (type == SFS_PATH_TYPE_APP_PATH)
+    else if (type == PATH_TYPE_APP_PATH)
     {
         result = GetApplicationName(pathPtr, appName, sizeof(appName));
 
@@ -1868,8 +1887,8 @@ static le_result_t IteratePathCopy
 
                 // Identify key name for this path
                 char keyName[LIMIT_MAX_APP_NAME_BYTES];
-                SfsPathType_t type = GetPathType(path);
-                if (type == SFS_PATH_TYPE_APP_PATH)
+                PathType_t type = GetPathType(path);
+                if (type == PATH_TYPE_APP_PATH)
                 {
                     result = GetApplicationName(path, keyName, sizeof(keyName));
 
