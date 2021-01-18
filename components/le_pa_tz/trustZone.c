@@ -176,6 +176,12 @@ le_result_t tz_GenerateKey
     uint32_t* keySizePtr                ///< [IN/OUT] Size of key.
 )
 {
+    if ((keyPtr == NULL) || (keySizePtr == NULL) || (*keySizePtr == 0))
+    {
+        LE_ERROR("Invalid parameter: %s",((!keyPtr)||(!keySizePtr))?
+                 "keyPtr or keySizePtr is NULL":"keySize is 0");
+        return LE_FAULT;
+    }
     if (!SendTzRequest(TZDEV_IOCTL_KEYGEN_REQ, keyPtr, keySizePtr, NULL, NULL, NULL, NULL)
         || (*keySizePtr > KM_MAX_KEY_SIZE))
     {
@@ -185,7 +191,6 @@ le_result_t tz_GenerateKey
 
     return LE_OK;
 }
-
 
 /**-----------------------------------------------------------------------------------------------
  *
