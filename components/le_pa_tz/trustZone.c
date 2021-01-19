@@ -276,7 +276,7 @@ le_result_t tz_EncryptData
 {
     if ((keySize > KM_MAX_KEY_SIZE) || (keySize == 0))
     {
-        LE_ERROR("Invalid key");
+        LE_ERROR("Invalid key: key size %u", keySize);
         return LE_FAULT;
     }
 

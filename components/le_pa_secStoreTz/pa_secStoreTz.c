@@ -147,10 +147,10 @@ static bool SfsReady = false;
 
 //--------------------------------------------------------------------------------------------------
 /**
- * Hash map of key data.
+ * Array of HashMaps holding encrytpion keys.
  */
 //--------------------------------------------------------------------------------------------------
-static le_hashmap_Ref_t KeyMap = NULL;
+static le_hashmap_Ref_t KeyMap[LE_SECSTORE_VERSION_IKS + 1] = {NULL};
 
 
 //--------------------------------------------------------------------------------------------------
@@ -158,7 +158,7 @@ static le_hashmap_Ref_t KeyMap = NULL;
  * Estimated maximum number of keys.
  */
 //--------------------------------------------------------------------------------------------------
-#define ESTIMATED_MAX_KEYS             100
+#define ESTIMATED_MAX_KEYS             8
 
 
 //--------------------------------------------------------------------------------------------------
@@ -168,6 +168,21 @@ static le_hashmap_Ref_t KeyMap = NULL;
 //--------------------------------------------------------------------------------------------------
 static le_mem_PoolRef_t KeyPool = NULL;
 
+//--------------------------------------------------------------------------------------------------
+/**
+ * Current version of the SecStore data storage: depends on whether IKS is enabled, and whether
+ * the current platform is Linux or RTOS.
+ */
+//--------------------------------------------------------------------------------------------------
+#if LE_CONFIG_SECSTORE_IKS_BACKEND
+    #define CURRENT_SECSTORE_VERSION LE_SECSTORE_VERSION_IKS
+#else
+    #ifdef LE_CONFIG_LINUX
+        #define CURRENT_SECSTORE_VERSION LE_SECSTORE_VERSION_TZ
+    #else
+        #define CURRENT_SECSTORE_VERSION LE_SECSTORE_VERSION_SFS
+    #endif
+#endif
 
 //--------------------------------------------------------------------------------------------------
 /**
@@ -234,11 +249,24 @@ static const PathClass_t PathClasses[] = {
 
 //--------------------------------------------------------------------------------------------------
 /**
+ * Context for PortDataEntry callback
+ */
+//--------------------------------------------------------------------------------------------------
+typedef struct
+{
+    le_secStore_Version_t   version;
+    le_cfg_IteratorRef_t    writeIter;
+}
+EntryContext_t;
+
+//--------------------------------------------------------------------------------------------------
+/**
  * Prototype for iteratively getting entries.
  */
 //--------------------------------------------------------------------------------------------------
 typedef void (*pa_secStore_GetEntry_t)
 (
+    const char* entryPathPtr,       ///< [IN] Entry path.
     const char* entryPtr,           ///< [IN] Entry name.
     bool isDir,                     ///< [IN] true if the entry is a directory, otherwise entry is a
                                     ///       file.
@@ -406,9 +434,12 @@ out:
 //--------------------------------------------------------------------------------------------------
 static le_result_t GenerateKey
 (
-    const char* keyName    ///< [IN] Name of the key.
+    le_secStore_Version_t version,  ///< [IN] Secure Storage version.
+    const char* keyName             ///< [IN] Name of the key.
 )
 {
+    LE_DEBUG("Generating new key: name %s version %u", keyName, version);
+
     // Open the sfs file.
     int fd = le_atomFile_Create(KEY_FILE,
                                 LE_FLOCK_READ_AND_APPEND,
@@ -426,7 +457,7 @@ static le_result_t GenerateKey
     memset(key, 0, sizeof(*key));
     le_utf8_Copy(key->name, keyName, sizeof(key->name), NULL);
 
-    if (keyName)
+    if (keyName && (version == CURRENT_SECSTORE_VERSION))
     {
         // Write the path to the file.
         if (le_fd_Write(fd, key->name, sizeof(key->name)) != sizeof(key->name))
@@ -436,15 +467,22 @@ static le_result_t GenerateKey
 
         // Generate key for this app
         key->blobSize = sizeof(key->blob);
+        le_result_t result = LE_FAULT;
 #if LE_CONFIG_SECSTORE_IKS_BACKEND
-        // TODO: use table with function pointers, to be able to decide at runtime which
-        // one to call - this is needed to migrate the data on Legato upgrade.
-        le_result_t result = iksCrypto_GenerateKey(key->blob, &key->blobSize);
-#else
-        le_result_t result = tz_GenerateKey(key->blob, &key->blobSize);
+        if (version == LE_SECSTORE_VERSION_IKS)
+        {
+            result = iksCrypto_GenerateKey(key->blob, &key->blobSize);
+        }
+#endif
+#if LE_CONFIG_LINUX
+        if (version == LE_SECSTORE_VERSION_TZ)
+        {
+            result = tz_GenerateKey(key->blob, &key->blobSize);
+        }
 #endif
         if (result != LE_OK)
         {
+            LE_ERROR("Error generating key of version %u", version);
             goto handleWriteError;
         }
 
@@ -462,7 +500,7 @@ static le_result_t GenerateKey
     }
 
     le_atomFile_Close(fd);
-    le_hashmap_Put(KeyMap, key->name, key);
+    le_hashmap_Put(KeyMap[version], key->name, key);
     return LE_OK;
 
 handleWriteError:
@@ -485,24 +523,25 @@ handleWriteError:
 //--------------------------------------------------------------------------------------------------
 static le_result_t GetKey
 (
-    const char* keyName,    ///< [IN] Name of the key.
-    uint8_t* keyPtr,        ///< [IN/OUT] Key blob for the specified key name.
-    uint32_t* keySize       ///< [IN/OUT] Size of the key blob.
+    le_secStore_Version_t version,      ///< [IN] Secure Storage version.
+    const char* keyName,                ///< [IN] Name of the key.
+    uint8_t* keyPtr,                    ///< [IN/OUT] Key blob for the specified key name.
+    uint32_t* keySize                   ///< [IN/OUT] Size of the key blob.
 )
 {
-    const Key_t* key = le_hashmap_Get(KeyMap, keyName);
+    const Key_t* key = le_hashmap_Get(KeyMap[version], keyName);
 
     if (key == NULL)
     {
-        LE_DEBUG("Generating new key for: %s.", keyName);
-        le_result_t result = GenerateKey(keyName);
+        LE_DEBUG("Generating new key for: %s version %u", keyName, version);
+        le_result_t result = GenerateKey(version, keyName);
 
         if (result != LE_OK)
         {
             return result;
         }
 
-        key = le_hashmap_Get(KeyMap, keyName);
+        key = le_hashmap_Get(KeyMap[version], keyName);
 
         if (key == NULL)
         {
@@ -511,7 +550,7 @@ static le_result_t GetKey
     }
     else
     {
-        LE_DEBUG("Key exist.");
+        LE_DEBUG("Found key '%s' version %u.", keyName, version);
     }
 
     if (*keySize < key->blobSize)
@@ -537,26 +576,44 @@ static le_result_t GetKey
 //--------------------------------------------------------------------------------------------------
 static bool IsKeyValid
 (
-    Key_t *keyPtr
+    le_secStore_Version_t version,      ///< [IN] Secure Storage version.
+    Key_t *keyPtr                       ///< [IN] Pointer to the Key structure.
 )
 {
-    le_result_t result;
+    le_result_t result = LE_FAULT;
     uint8_t plainBuf[4] = {0};
     uint8_t encryptedBuf[128];  // must accomodate the encryption overhead
     uint32_t encryptedBufSize = sizeof(encryptedBuf);
 
     // Check whether the key can encrypt a small data array
 #if LE_CONFIG_SECSTORE_IKS_BACKEND
-    result = iksCrypto_EncryptData
-#else
-    result = tz_EncryptData
+    if (version == LE_SECSTORE_VERSION_IKS)
+    {
+        // First check if the key blob size is what is expected to be for IKS case
+        if (keyPtr->blobSize != KM_MAX_KEY_SIZE)
+        {
+            return false;
+        }
+        // Do the test encryption of the small buffer.
+        result = iksCrypto_EncryptData(keyPtr->blob, keyPtr->blobSize,
+                                       (uint8_t*)plainBuf, sizeof(plainBuf),
+                                       encryptedBuf, &encryptedBufSize);
+    }
 #endif
-                           (keyPtr->blob,
-                            keyPtr->blobSize,
-                            (uint8_t*)plainBuf,
-                            sizeof(plainBuf),
-                            encryptedBuf,
-                            &encryptedBufSize);
+#if LE_CONFIG_LINUX
+    if (version == LE_SECSTORE_VERSION_TZ)
+    {
+        // Do the test encryption of the small buffer.
+        result = tz_EncryptData(keyPtr->blob, keyPtr->blobSize,
+                                (uint8_t*)plainBuf, sizeof(plainBuf),
+                                encryptedBuf, &encryptedBufSize);
+    }
+#endif
+    if (result != LE_OK)
+    {
+        LE_INFO("Key '%s' not valid for SecStore version %u: %s", keyPtr->name, version,
+                LE_RESULT_TXT(result));
+    }
 
     return (result == LE_OK);
 }
@@ -573,24 +630,31 @@ static bool IsKeyValid
 //--------------------------------------------------------------------------------------------------
 static le_result_t ResetKeys
 (
-    le_hashmap_Ref_t map            ///< [IN] The hash map to import the meta data to.
+    le_secStore_Version_t version,  ///< [IN] Secure Storage version.
+    bool deleteFile                 ///< [IN] Whether the keys file needs to be deleted.
 )
 {
-    // delete the key file
-    LE_INFO("Recovering the keys file.");
-    le_result_t result = le_atomFile_Delete(KEY_FILE);
-    if (result != LE_OK)
-    {
-        LE_ERROR("Error deleting key file");
-        return LE_FAULT;
-    }
-
+    le_hashmap_Ref_t map = KeyMap[version];
     // free all keys and empty the map
+    LE_INFO("Resetting keys: version %u", version);
     le_hashmap_It_Ref_t iter = le_hashmap_GetIterator(map);
     while (le_hashmap_NextNode(iter) == LE_OK)
     {
         Key_t* key = le_hashmap_GetValue(iter);
         le_hashmap_Remove(map, key->name);
+        le_mem_Release(key);
+    }
+
+    // if required, delete the key file
+    if (deleteFile)
+    {
+        LE_INFO("Deleting the key file.");
+        le_result_t result = le_atomFile_Delete(KEY_FILE);
+        if (result != LE_OK)
+        {
+            LE_ERROR("Error deleting key file");
+            return LE_FAULT;
+        }
     }
 
     return LE_OK;
@@ -609,9 +673,19 @@ static le_result_t ResetKeys
 //--------------------------------------------------------------------------------------------------
 static le_result_t ImportKey
 (
+    le_secStore_Version_t version,  ///< [IN] Secure Storage version.
     le_hashmap_Ref_t map            ///< [IN] The hash map to import the meta data to.
 )
 {
+
+    LE_DEBUG("Importing keys: vers %u", version);
+    // check if version is valid
+    if ((version != LE_SECSTORE_VERSION_TZ) && (version != LE_SECSTORE_VERSION_IKS))
+    {
+        LE_ERROR("Wrong SecStore version: %u", version);
+        return LE_FAULT;
+    }
+
     // Check content of file
     int fd = le_atomFile_Create(KEY_FILE,
                                 LE_FLOCK_READ,
@@ -649,15 +723,16 @@ static le_result_t ImportKey
         {
             goto handleReadError;
         }
-
-        if (IsKeyValid(key))
+        if (IsKeyValid(version, key))
         {
-            LE_DEBUG("Importing key [%s] size [%d]", (char*)key->name, key->blobSize);
+            LE_DEBUG("Importing key [%s] size %d vers %u: is valid", (char*)key->name,
+                     key->blobSize, version);
             le_hashmap_Put(map, key->name, key);
         }
         else
         {
-            LE_ERROR("Key '%s' is invalid", key->name);
+            LE_ERROR("Invalid key [%s] size %d vers %u", (char*)key->name,
+                     key->blobSize, version);
             goto handleReadError;
         }
     }
@@ -679,6 +754,64 @@ handleReadError:
     return LE_OK;
 }
 
+/**-----------------------------------------------------------------------------------------------
+ *
+ * Encrypt the data using the method specified by the version parameter.
+ *
+ * @return
+ *      - LE_OK
+ *      - LE_OVERFLOW
+ *      - LE_FAULT
+ */
+//--------------------------------------------------------------------------------------------------
+static le_result_t EncryptData
+(
+    le_secStore_Version_t version,      ///< [IN] Secure Storage version.
+    const char* keyName,                ///< [IN] Name of the key.
+    uint8_t* plainDataPtr,              ///< [IN] Plain text.
+    uint32_t plainDataSize,             ///< [IN] Size of plain text.
+    uint8_t* encryptedDataPtr,          ///< [IN/OUT] Encrypted data.
+    uint32_t* encryptedDataSizePtr      ///< [IN/OUT] Size of encrypted data.
+)
+{
+    // Get key
+    uint8_t key[KM_MAX_KEY_SIZE];
+    uint32_t keySize = sizeof(key);
+
+    LE_DEBUG("Encrypting data: key %s vers %u size %" PRIu32, keyName, version, plainDataSize);
+    le_result_t result = GetKey(version, keyName, key, &keySize);
+
+    if (result != LE_OK)
+    {
+        LE_ERROR("Unable to get key.");
+        return LE_FAULT;
+    }
+
+    result = LE_FAULT;
+#if LE_CONFIG_SECSTORE_IKS_BACKEND
+    if (version == LE_SECSTORE_VERSION_IKS)
+    {
+        result = iksCrypto_EncryptData(key, keySize,
+                                       plainDataPtr, plainDataSize,
+                                       encryptedDataPtr, encryptedDataSizePtr);
+    }
+#endif
+#if LE_CONFIG_LINUX
+    if (version == LE_SECSTORE_VERSION_TZ)
+    {
+        result = tz_EncryptData(key, keySize,
+                                plainDataPtr, plainDataSize,
+                                encryptedDataPtr, encryptedDataSizePtr);
+    }
+#endif
+    if (result != LE_OK)
+    {
+        LE_ERROR("Unable to encrypt: vers %u rc %s size %"PRIuS, version,
+                 LE_RESULT_TXT(result), plainDataSize);
+    }
+
+    return result;
+}
 
 //--------------------------------------------------------------------------------------------------
 /**
@@ -696,7 +829,9 @@ handleReadError:
 //--------------------------------------------------------------------------------------------------
 static le_result_t Write
 (
-    const char* keyName,                ///< [IN] Name of the key.
+    le_secStore_Version_t version,      ///< [IN] Secure Storage version.
+    const char* keyName,                ///< [IN] Name of the key. Can be NULL if data is
+                                        ///<      already encrypted.
     const char* pathPtr,                ///< [IN] Path to write to.
     const uint8_t* bufPtr,              ///< [IN] Buffer containing the data.
     size_t bufSize,                     ///< [IN] Size of buffered data.
@@ -705,39 +840,21 @@ static le_result_t Write
                                         ///       a new one and do not commit.
 )
 {
-    // Get key
-    uint8_t key[KM_MAX_KEY_SIZE];
-    uint32_t keySize = sizeof(key);
-
-    le_result_t result = GetKey(keyName, key, &keySize);
-
-    if (result != LE_OK)
-    {
-        LE_ERROR("Unable to get key.");
-        return LE_FAULT;
-    }
-
     // Encrypt the data
     uint8_t* encryptedBuf = le_mem_ForceAlloc(EncryptedBufferPool);
     uint32_t encryptedBufSize = MAX_ENCRYPTED_DATA_BYTES;
-
     le_cfg_IteratorRef_t iteratorRef = iterRef;
+    le_result_t result = LE_OK;
 
     // When we copy data from one system index to another, the buffered data
     // is already encrypted. We are just writing the data to another path.
     if ((!isEncrypted) && (bufSize != 0))
     {
-#if LE_CONFIG_SECSTORE_IKS_BACKEND
-        result = iksCrypto_EncryptData
-#else
-        result = tz_EncryptData
-#endif
-                               (key,
-                                keySize,
-                                (uint8_t*)bufPtr,
-                                bufSize,
-                                encryptedBuf,
-                                &encryptedBufSize);
+        result = EncryptData(version, keyName,
+                             (uint8_t*) bufPtr,
+                             bufSize,
+                             encryptedBuf,
+                             &encryptedBufSize);
 
         if (result != LE_OK)
         {
@@ -747,7 +864,7 @@ static le_result_t Write
     }
 
     // Create a new write iterator
-    if (iterRef == NULL)
+    if (iteratorRef == NULL)
     {
         iteratorRef = le_cfg_CreateWriteTxn(CFG_SECSTORE);
     }
@@ -780,33 +897,63 @@ exit:
     return result;
 }
 
-
-//--------------------------------------------------------------------------------------------------
-/**
- * Reads data from the specified path in modem secure storage.
+/**-----------------------------------------------------------------------------------------------
+ *
+ * Decrypt encrypted data using the method specified by the version parameter.
  *
  * @return
- *      LE_OK if successful.
- *      LE_OVERFLOW if the buffer is too small to hold all the data.  No data will be written to the
- *                  buffer in this case.
- *      LE_NOT_FOUND if the path is empty.
- *      LE_UNAVAILABLE if the secure storage is currently unavailable.
- *      LE_FAULT if there was some other error.
+ *      - LE_OK
+ *      - LE_OVERFLOW
+ *      - LE_FAULT
  */
 //--------------------------------------------------------------------------------------------------
-static le_result_t ModemRead
+static le_result_t DecryptData
 (
-    const char* pathPtr,            ///< [IN] Path to read from.
-    uint8_t* bufPtr,                ///< [OUT] Buffer to store the data in.
-    size_t* bufSizePtr              ///< [IN/OUT] Size of buffer when this function is called.
-                                    ///           Number of bytes read when this function returns.
+    le_secStore_Version_t version,      ///< [IN] Secure Storage version.
+    const char* keyName,                ///< [IN] Name of the key.
+    uint8_t* encryptedDataPtr,          ///< [IN] Encrypted data.
+    size_t encryptedDataSize,           ///< [IN] Size of encrypted data.
+    uint8_t* decryptedDataPtr,          ///< [IN/OUT] Decrypted data.
+    size_t* decryptedDataSize           ///< [IN/OUT] Size of decrypted data.
 )
 {
-    LE_DEBUG("Reading from modem secure storage [%s]", pathPtr);
+    uint8_t key[KM_MAX_KEY_SIZE];
+    uint32_t keySize = sizeof(key);
+    le_result_t result;
 
-    return sfsSecStore_Read(pathPtr, bufPtr, bufSizePtr);
+    result = GetKey(version, keyName, key, &keySize);
+
+    if (result != LE_OK)
+    {
+        LE_ERROR("Unable to get key %s: result %s", keyName, LE_RESULT_TXT(result));
+        return result;
+    }
+
+    result = LE_FAULT;
+#if LE_CONFIG_SECSTORE_IKS_BACKEND
+    if (version == LE_SECSTORE_VERSION_IKS)
+    {
+        result = iksCrypto_DecryptData(key, keySize,
+                                       encryptedDataPtr, encryptedDataSize,
+                                       decryptedDataPtr, decryptedDataSize);
+    }
+#endif
+#if LE_CONFIG_LINUX
+    if (version == LE_SECSTORE_VERSION_TZ)
+    {
+        result = tz_DecryptData(key, keySize,
+                                encryptedDataPtr, encryptedDataSize,
+                                decryptedDataPtr, decryptedDataSize);
+    }
+#endif
+    if (result != LE_OK)
+    {
+        LE_ERROR("Unable to decrypt: vers %u rc %s size %"PRIuS, version,
+                 LE_RESULT_TXT(result), encryptedDataSize);
+    }
+
+    return result;
 }
-
 
 //--------------------------------------------------------------------------------------------------
 /**
@@ -821,14 +968,16 @@ static le_result_t ModemRead
  *      LE_FAULT if there was some other error.
  */
 //--------------------------------------------------------------------------------------------------
-static le_result_t Read
+static le_result_t ConfigTreeRead
 (
-    const char* keyName,    ///< [IN] Name of the key.
-    const char* pathPtr,    ///< [IN] Path to read from.
-    uint8_t* bufPtr,        ///< [IN/OUT] Buffer stored in the path.
-    size_t* bufSize         ///< [IN/OUT] Size of buffer stored in the path.
+    le_secStore_Version_t version,  ///< [IN] Secure Storage version.
+    const char* keyName,            ///< [IN] Name of the key.
+    const char* pathPtr,            ///< [IN] Path to read from.
+    uint8_t* bufPtr,                ///< [IN/OUT] Buffer stored in the path.
+    size_t* bufSizePtr              ///< [IN/OUT] Size of buffer stored in the path.
 )
 {
+    LE_UNUSED(version);
     le_result_t result = LE_OK;
     le_cfg_IteratorRef_t iteratorRef = le_cfg_CreateReadTxn(CFG_SECSTORE);
     uint8_t* encryptedData = le_mem_ForceAlloc(EncryptedBufferPool);
@@ -837,6 +986,7 @@ static le_result_t Read
 
     if (!le_cfg_NodeExists(iteratorRef, pathPtr))
     {
+        LE_WARN("Node not exist!! '%s'", pathPtr);
         result = LE_NOT_FOUND;
     }
     else
@@ -853,38 +1003,20 @@ static le_result_t Read
             goto exit;
         }
 
-        // // Manage case where the data is empty
+        // Manage case where the data is empty
         if (encryptedDataSize == 0)
         {
-            memset(bufPtr, 0, *bufSize);
-            *bufSize = 0;
-            goto exit;
+            memset(bufPtr, 0, *bufSizePtr);
+            *bufSizePtr = 0;
         }
         else
         {
-            uint8_t key[KM_MAX_KEY_SIZE];
-            uint32_t keySize = sizeof(key);
-
-            result = GetKey(keyName, key, &keySize);
-
+            result = DecryptData(version, keyName, encryptedData, encryptedDataSize,
+                                 bufPtr, bufSizePtr);
             if (result != LE_OK)
             {
-                LE_ERROR("Unable to get key [%s].", pathPtr);
-                goto exit;
-            }
-
-#if LE_CONFIG_SECSTORE_IKS_BACKEND
-            result = iksCrypto_DecryptData
-#else
-            result = tz_DecryptData
-#endif
-                                    (key, keySize,
-                                     encryptedData, encryptedDataSize,
-                                     bufPtr, bufSize);
-            if (result != LE_OK)
-            {
-                LE_ERROR("Unable to decrypt data [%s].", pathPtr);
-                goto exit;
+                LE_ERROR("Unable to decrypt: vers %u rc %s path [%s]", version,
+                         LE_RESULT_TXT(result), pathPtr);
             }
         }
     }
@@ -895,6 +1027,42 @@ exit:
     return result;
 }
 
+//--------------------------------------------------------------------------------------------------
+/**
+ * Searches configTree for encrypted data stored for a specific path. The encrypted data is
+ * decrypted using an existing key and returned to the user.
+ *
+ *      LE_OK if successful.
+ *      LE_OVERFLOW if the buffer is too small to hold all the data.  No data will be written to the
+ *                  buffer in this case.
+ *      LE_NOT_FOUND if the path is empty.
+ *      LE_UNAVAILABLE if the secure storage is currently unavailable.
+ *      LE_FAULT if there was some other error.
+ */
+//--------------------------------------------------------------------------------------------------
+static le_result_t Read
+(
+    le_secStore_Version_t version,  ///< [IN] Secure Storage version.
+    const char* keyName,            ///< [IN] Name of the key.
+    const char* pathPtr,            ///< [IN] Path to read from.
+    uint8_t* bufPtr,                ///< [IN/OUT] Buffer stored in the path.
+    size_t* bufSizePtr              ///< [IN/OUT] Size of buffer stored in the path.
+)
+{
+    LE_DEBUG("Reading data: path '%s' vers %u", pathPtr, version);
+    switch (version)
+    {
+        case LE_SECSTORE_VERSION_SFS:
+            return sfsSecStore_Read(pathPtr, bufPtr, bufSizePtr);
+        case LE_SECSTORE_VERSION_TZ:
+        case LE_SECSTORE_VERSION_IKS:
+            return ConfigTreeRead(version, keyName, pathPtr, bufPtr, bufSizePtr);
+        default:
+            break;
+    }
+    LE_ERROR("Unsupported SecStore version");
+    return LE_UNAVAILABLE;
+}
 
 //--------------------------------------------------------------------------------------------------
 /**
@@ -1034,28 +1202,9 @@ static le_result_t IteratePathSize
                         le_utf8_Copy(keyName, CFG_SECSTORE_USER_PATH, sizeof(keyName), NULL);
                     }
 
-                    // Get key
-                    uint8_t key[KM_MAX_KEY_SIZE];
-                    uint32_t keySize = sizeof(key);
-                    result = GetKey(keyName, key, &keySize);
-
-                    if (result != LE_OK)
-                    {
-                        LE_ERROR("Unable to get key [%s].", path);
-                        goto exit;
-                    }
-
-#if LE_CONFIG_SECSTORE_IKS_BACKEND
-                    result = iksCrypto_DecryptData
-#else
-                    result = tz_DecryptData
-#endif
-                                           (key,
-                                            keySize,
-                                            encryptedData,
-                                            encryptedDataSize,
-                                            buffer,
-                                            &bufferSize);
+                    result = DecryptData(CURRENT_SECSTORE_VERSION, keyName,
+                                         encryptedData, encryptedDataSize,
+                                         buffer, &bufferSize);
                     // If the data can't be decrypted (due to lost key file as a result of Legato
                     // downgrade), use the encrypted size in calculations and return OK.
                     // This will allow Write() operation to succeed and overwrite the bad data.
@@ -1302,7 +1451,7 @@ static le_result_t CopySfsFromMeta
         // Read this data from modem sfs and write to new location
         uint8_t sfsData[LE_SECSTORE_MAX_ITEM_SIZE];
         size_t sfsDataSize = sizeof(sfsData);
-        result = ModemRead(path, sfsData, &sfsDataSize);
+        result = Read(LE_SECSTORE_VERSION_SFS, NULL, path, sfsData, &sfsDataSize);
 
         if (result != LE_OK)
         {
@@ -1325,7 +1474,7 @@ static le_result_t CopySfsFromMeta
             le_utf8_Copy(appName, CFG_SECSTORE_USER_PATH, sizeof(appName), NULL);
         }
 
-        result = Write(appName, path, sfsData, sfsDataSize, false, NULL);
+        result = Write(CURRENT_SECSTORE_VERSION, appName, path, sfsData, sfsDataSize, false, NULL);
 
         if (result != LE_OK)
         {
@@ -1346,21 +1495,175 @@ handleMetaCorruption:
     return LE_FAULT;
 }
 
+#if LE_CONFIG_LINUX
+//--------------------------------------------------------------------------------------------------
+/**
+ * Port a data entry from one SecStore version to another.
+ */
+//--------------------------------------------------------------------------------------------------
+static void PortDataEntry
+(
+    const char* entryPathPtr,   ///< [IN] Entry path
+    const char* entryPtr,       ///< [IN] Entry name
+    bool isDir,                 ///< [IN] true if the entry is a directory, otherwise entry is a
+                                ///       file.
+    void* contextPtr            ///< [IN] Context pointer.
+)
+{
+    le_result_t result;
+    EntryContext_t *entryCtxPtr = (EntryContext_t *) contextPtr;
+
+    le_secStore_Version_t oldVersion = entryCtxPtr->version;
+    LE_DEBUG("Porting entry from: version %u path '%s'", oldVersion, entryPathPtr);
+
+    char appName[LIMIT_MAX_APP_NAME_BYTES];
+    PathType_t type = GetPathType(entryPathPtr);
+    if ((type == PATH_TYPE_AVMS_PATH) ||
+        (type == PATH_TYPE_APP_PATH))
+    {
+        result = GetApplicationName(entryPathPtr, appName, sizeof(appName));
+        if (result != LE_OK)
+        {
+            LE_ERROR("Error getting app name");
+            return;
+        }
+    }
+    else
+    {
+        le_utf8_Copy(appName, CFG_SECSTORE_USER_PATH, sizeof(appName), NULL);
+    }
+
+    uint8_t sfsData[LE_SECSTORE_MAX_ITEM_SIZE];
+    size_t sfsDataSize = sizeof(sfsData);
+    result = Read(oldVersion, appName, entryPathPtr, sfsData, &sfsDataSize);
+    if (LE_OK != result)
+    {
+        LE_ERROR("Read error: %s path '%s' vers %u", LE_RESULT_TXT(result), entryPathPtr,
+                 oldVersion);
+        return;
+    }
+
+    result = Write(CURRENT_SECSTORE_VERSION, appName, entryPathPtr, sfsData, sfsDataSize,
+                   false, entryCtxPtr->writeIter);
+    if (result != LE_OK)
+    {
+        LE_ERROR("Error writing entry '%s' size %" PRIuS " app %s",
+                 entryPathPtr, sfsDataSize, appName);
+    }
+}
+#endif // LE_CONFIG_LINUX
 
 //--------------------------------------------------------------------------------------------------
 /**
- * Initialize the sfs if is not already initialized.
+ * Port data from the previous version of the Secure Storage.
+ *
+ * @return
+ *      true if data is ported.
+ *      false otherwise.
+ */
+//--------------------------------------------------------------------------------------------------
+static bool PortDataFrom
+(
+    le_secStore_Version_t version
+)
+{
+    le_result_t result = LE_FAULT;
+
+    LE_INFO("Attempt to port data from version %u", version);
+    if (version == LE_SECSTORE_VERSION_TZ)
+    {
+#if LE_CONFIG_LINUX
+        if (KeyMap[version] == NULL)
+        {
+            KeyMap[version] = le_hashmap_Create("SecStoreKeysLegacy",
+                                                ESTIMATED_MAX_KEYS,
+                                                le_hashmap_HashString,
+                                                le_hashmap_EqualsString);
+        }
+        // Port old TrustZone-encrypted data.
+        // Load the legacy keys
+        LE_INFO("Importing legacy keys");
+        result = ImportKey(version, KeyMap[version]);
+        if (result != LE_OK)
+        {
+            LE_ERROR("Key file is not valid for TrustZone encryption");
+            return false;
+        }
+        else
+        {
+            LE_INFO("Legacy keys imported successfully");
+        }
+
+        // Initialize/Reset the current keys
+        ResetKeys(CURRENT_SECSTORE_VERSION, true);
+
+        // Iterate through entries
+        EntryContext_t entryCtx;
+        entryCtx.version = version;
+        entryCtx.writeIter = le_cfg_CreateWriteTxn(CFG_SECSTORE);
+        le_cfg_GoToNode(entryCtx.writeIter, "");
+        result = pa_secStore_GetEntries("", PortDataEntry, (void *) &entryCtx);
+        le_cfg_CommitTxn(entryCtx.writeIter);
+
+        // Clear the legacy key map: it's not needed anymore. Don't delete the file,
+        // because it's already populated with new keys.
+        ResetKeys(version, false);
+
+        LE_INFO("Porting data from TrustZone: result %s", LE_RESULT_TXT(result));
+        return (result == LE_OK);
+#else
+        LE_INFO("TrustZone driver encryption is not available on non-Linux platforms");
+        return false;
+#endif // LE_CONFIG_LINUX
+    }
+    if (version <= LE_SECSTORE_VERSION_SFS)
+    {
+        // Port old secure storage data from modem SFS.
+        // SFS meta data can come from two different sources: modem or FS. This will
+        // manage both cases depending on the upgrade path.
+        struct stat buffer;
+        int isSfsV2 = stat(META_FILE, &buffer);
+
+        LE_INFO("Porting data from SFS: isSfsV2=%d", isSfsV2);
+        if (isSfsV2 != 0)
+        {
+            // Need to pull meta data out of the modem first
+            result = ModemCopyMetaTo(TMP_META_FILE);
+
+            if (result != LE_OK)
+            {
+                LE_ERROR("Failed to copy meta data to %s", TMP_META_FILE);
+            }
+
+            result = CopySfsFromMeta(TMP_META_FILE);
+        }
+        else
+        {
+            result = CopySfsFromMeta(META_FILE);
+        }
+
+        LE_INFO("Porting data from SFS: result %s", LE_RESULT_TXT(result));
+        return (result == LE_OK);
+    }
+
+    LE_FATAL("Invalid version to port from!");
+    return false;
+}
+
+//--------------------------------------------------------------------------------------------------
+/**
+ * Initialize the Secure Storage if it is not already initialized.
  *
  * @note
- *      This should be called each time the sfs is accessed to ensure that the sfs is ready for use.
+ *      This should be called each time the sfs is accessed to ensure SecStore is ready for use.
  *
  * @return
  *      LE_OK if successful.
- *      LE_UNAVAILABLE if the sfs is currently unavailable.
+ *      LE_UNAVAILABLE if currently unavailable.
  *      LE_FAULT if there was some other error.
  */
 //--------------------------------------------------------------------------------------------------
-static le_result_t InitSfs
+static le_result_t InitSecStore
 (
     void
 )
@@ -1368,53 +1671,73 @@ static le_result_t InitSfs
     le_result_t result = LE_OK;
     if (!SfsReady)
     {
-        LE_DEBUG("Initializing SFS");
-        result = ImportKey(KeyMap);
+        LE_DEBUG("Initializing storage: curr version %u", CURRENT_SECSTORE_VERSION);
+        SfsReady = true;
 
-        if (result != LE_OK)
-        {
-            result = ResetKeys(KeyMap);
-            if (result != LE_OK)
-            {
-                return result;
-            }
-        }
-
-        // Port old secure storage data from modem SFS.
-        // SFS meta data can come from two different sources: modem or FS. This will
-        // manage both cases depending on the upgrade path.
         le_cfg_IteratorRef_t iteratorRef = le_cfg_CreateReadTxn(CFG_SECSTORE);
         bool isPorted = le_cfg_GetBool(iteratorRef, "isPorted", false);
         le_cfg_CancelTxn(iteratorRef);
+        LE_DEBUG("Retrieved isPorted: %d", isPorted);
 
+        // Import encryption keys (and check them for validity)
+        result = ImportKey(CURRENT_SECSTORE_VERSION, KeyMap[CURRENT_SECSTORE_VERSION]);
+        if (result != LE_OK)
+        {
+            // Just in case: clear the key map
+            le_hashmap_It_Ref_t iter = le_hashmap_GetIterator(KeyMap[CURRENT_SECSTORE_VERSION]);
+            while (le_hashmap_NextNode(iter) == LE_OK)
+            {
+                Key_t* key = le_hashmap_GetValue(iter);
+                le_hashmap_Remove(KeyMap[CURRENT_SECSTORE_VERSION], key->name);
+                le_mem_Release(key);
+            }
+            LE_INFO("Key file is not valid for current vesion of SecStore (%u)",
+                    CURRENT_SECSTORE_VERSION);
+            isPorted = false;
+        }
         if (!isPorted)
         {
-            struct stat buffer;
-            int isSfsV2 = stat(META_FILE, &buffer);
+            LE_INFO("Porting old SecStore data.");
+            int version;
 
-            if (isSfsV2 != 0)
+            // Go down the version sequence (from previous to older), try to port the data
+            for (version = (int) CURRENT_SECSTORE_VERSION - 1;
+                 version >= (int) LE_SECSTORE_VERSION_SFS;
+                 version --)
             {
-                // Need to pull meta data out of the modem first
-                result = ModemCopyMetaTo(TMP_META_FILE);
-
-                if (result != LE_OK)
+                if (PortDataFrom((le_secStore_Version_t) version))
                 {
-                    LE_ERROR("Failed to copy meta data to %s", TMP_META_FILE);
+                    // if porting data from version N is successful, no need to port it
+                    // from the version (N-1)
+                    isPorted = true;
+                    break;
                 }
-
-                result = CopySfsFromMeta(TMP_META_FILE);
+            }
+            if (isPorted)
+            {
+                LE_INFO("Data successfully ported from %s",
+                        version == (int) LE_SECSTORE_VERSION_TZ ? "TZ" : "SFS");
+                le_cfg_IteratorRef_t iteratorRef = le_cfg_CreateWriteTxn(CFG_SECSTORE);
+                le_cfg_SetBool(iteratorRef, "isPorted", true);
+                le_cfg_CommitTxn(iteratorRef);
             }
             else
             {
-                result = CopySfsFromMeta(META_FILE);
+                LE_WARN("Old data can't be ported");
             }
-
-            le_cfg_IteratorRef_t iteratorRef = le_cfg_CreateWriteTxn(CFG_SECSTORE);
-            le_cfg_SetBool(iteratorRef, "isPorted", true);
-            le_cfg_CommitTxn(iteratorRef);
         }
+        if ((KeyMap[CURRENT_SECSTORE_VERSION] == NULL)
+             || le_hashmap_isEmpty(KeyMap[CURRENT_SECSTORE_VERSION]))
+        {
+            LE_INFO("Importing current keys");
+            result = ImportKey(CURRENT_SECSTORE_VERSION, KeyMap[CURRENT_SECSTORE_VERSION]);
 
-        SfsReady = true;
+            if (result != LE_OK)
+            {
+                LE_WARN("Key file invalid, re-setting");
+                ResetKeys(CURRENT_SECSTORE_VERSION, true);
+            }
+        }
     }
 
     return result;
@@ -1444,8 +1767,8 @@ le_result_t pa_secStore_Write
 {
     LE_DEBUG("Writing: %s", pathPtr);
 
-    // Init the sfs.
-    le_result_t result = InitSfs();
+    // Init Secure Storage.
+    le_result_t result = InitSecStore();
     if (result != LE_OK)
     {
         return result;
@@ -1470,7 +1793,7 @@ le_result_t pa_secStore_Write
         le_utf8_Copy(appName, CFG_SECSTORE_USER_PATH, sizeof(appName), NULL);
     }
 
-    return Write(appName, pathPtr, bufPtr, bufSize, false, NULL);
+    return Write(CURRENT_SECSTORE_VERSION, appName, pathPtr, bufPtr, bufSize, false, NULL);
 }
 
 
@@ -1497,10 +1820,11 @@ le_result_t pa_secStore_Read
 {
     LE_DEBUG("Reading: %s", pathPtr);
 
-    // Init the sfs.
-    le_result_t result = InitSfs();
+    // Init Secure Storage.
+    le_result_t result = InitSecStore();
     if (result != LE_OK)
     {
+        LE_INFO("Init returned %s", LE_RESULT_TXT(result));
         return result;
     }
 
@@ -1519,7 +1843,7 @@ le_result_t pa_secStore_Read
         }
 
         size_t bufSizeBackup = *bufSizePtr;
-        result = Read(appName, pathPtr, bufPtr, bufSizePtr);
+        result = Read(CURRENT_SECSTORE_VERSION, appName, pathPtr, bufPtr, bufSizePtr);
 
         if (result == LE_OK)
         {
@@ -1531,7 +1855,7 @@ le_result_t pa_secStore_Read
             // Unsuccessful TrustZone read may have changed the output buffer size, so it needs
             // to be restored to its original value
             *bufSizePtr = bufSizeBackup;
-            result = ModemRead(pathPtr, bufPtr, bufSizePtr);
+            result = Read(LE_SECSTORE_VERSION_SFS, NULL, pathPtr, bufPtr, bufSizePtr);
 
             if (result != LE_OK)
             {
@@ -1539,7 +1863,8 @@ le_result_t pa_secStore_Read
                 return result;
             }
 
-            return Write(appName, pathPtr, bufPtr, *bufSizePtr, false, NULL);
+            return Write(CURRENT_SECSTORE_VERSION, appName, pathPtr, bufPtr, *bufSizePtr,
+                         false, NULL);
         }
     }
     else if (type == PATH_TYPE_APP_PATH)
@@ -1556,7 +1881,7 @@ le_result_t pa_secStore_Read
         le_utf8_Copy(appName, CFG_SECSTORE_USER_PATH, sizeof(appName), NULL);
     }
 
-    return Read(appName, pathPtr, bufPtr, bufSizePtr);
+    return Read(CURRENT_SECSTORE_VERSION, appName, pathPtr, bufPtr, bufSizePtr);
 }
 
 
@@ -1620,8 +1945,8 @@ le_result_t pa_secStore_Delete
 {
     LE_DEBUG("Deleting: %s", pathPtr);
 
-    // Init the sfs.
-    le_result_t result = InitSfs();
+    // Init Secure Storage.
+    le_result_t result = InitSecStore();
     if (result != LE_OK)
     {
         return result;
@@ -1648,8 +1973,8 @@ le_result_t pa_secStore_GetSize
     size_t* sizePtr                 ///< [OUT] Size in bytes of all items in the path.
 )
 {
-    // Init the sfs.
-    le_result_t result = InitSfs();
+    // Init Secure Storage.
+    le_result_t result = InitSecStore();
     if (result != LE_OK)
     {
         return result;
@@ -1741,7 +2066,7 @@ static le_result_t IteratePathEntries
                 // Call the callback function.
                 if (getEntryFunc != NULL)
                 {
-                    getEntryFunc(buf, isDir, contextPtr);
+                    getEntryFunc(path, buf, isDir, contextPtr);
                 }
 
                 break;
@@ -1770,8 +2095,8 @@ LE_SHARED le_result_t pa_secStore_GetEntries
     void* contextPtr                        ///< [IN] Context to be supplied to the callback.
 )
 {
-    // Init the sfs.
-    le_result_t result = InitSfs();
+    // Init Secure Storage.
+    le_result_t result = InitSecStore();
     if (result != LE_OK)
     {
         return result;
@@ -1885,34 +2210,6 @@ static le_result_t IteratePathCopy
             default:
                 le_cfg_GetPath(iteratorRef, "", path, sizeof(path));
 
-                // Identify key name for this path
-                char keyName[LIMIT_MAX_APP_NAME_BYTES];
-                PathType_t type = GetPathType(path);
-                if (type == PATH_TYPE_APP_PATH)
-                {
-                    result = GetApplicationName(path, keyName, sizeof(keyName));
-
-                    if (result != LE_OK)
-                    {
-                        return result;
-                    }
-                }
-                else
-                {
-                    le_utf8_Copy(keyName, CFG_SECSTORE_USER_PATH, sizeof(keyName), NULL);
-                }
-
-                // Get key
-                uint8_t key[KM_MAX_KEY_SIZE];
-                uint32_t keySize = sizeof(key);
-                result = GetKey(keyName, key, &keySize);
-
-                if (result != LE_OK)
-                {
-                    LE_ERROR("Unable to get key [%s].", path);
-                    return result;
-                }
-
                 char destPath[LE_CFG_STR_LEN_BYTES];
                 memset(destPath, 0, sizeof(destPath));
                 LE_FATAL_IF(le_path_Concat("/",
@@ -1945,8 +2242,10 @@ static le_result_t IteratePathCopy
                     goto exit;
                 }
 
-                 // Copy encrypted data to new path
-                Write(keyName, destPath, encryptedData, encryptedDataSize, true, iteratorRef);
+                // Copy encrypted data to new path
+                Write(CURRENT_SECSTORE_VERSION, NULL, destPath,
+                      encryptedData, encryptedDataSize,
+                      true, iteratorRef);
 
                 LE_DEBUG("Copying %s to %s", path, destPath);
 
@@ -1994,8 +2293,8 @@ le_result_t pa_secStore_Copy
         return LE_FAULT;
     }
 
-    // Init the sfs.
-    le_result_t result = InitSfs();
+    // Init Secure Storage.
+    le_result_t result = InitSecStore();
     if (result != LE_OK)
     {
         return result;
@@ -2048,8 +2347,8 @@ le_result_t pa_secStore_Move
         return LE_FAULT;
     }
 
-    // Init the sfs.
-    le_result_t result = InitSfs();
+    // Init Secure Storage.
+    le_result_t result = InitSecStore();
     if (result != LE_OK)
     {
         return result;
@@ -2132,8 +2431,8 @@ COMPONENT_INIT
                                                 MAX_ENCRYPTED_DATA_BYTES);
 
     // Create the key data hash map.
-    KeyMap = le_hashmap_Create("SfsFiles",
-                                ESTIMATED_MAX_KEYS,
-                                le_hashmap_HashString,
-                                le_hashmap_EqualsString);
+    KeyMap[CURRENT_SECSTORE_VERSION] = le_hashmap_Create("SecStoreKeys",
+                                        ESTIMATED_MAX_KEYS,
+                                        le_hashmap_HashString,
+                                        le_hashmap_EqualsString);
 }

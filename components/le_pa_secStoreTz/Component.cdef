@@ -25,10 +25,10 @@ requires:
     {
 #if ${LE_CONFIG_SECSTORE_IKS_BACKEND} = y
         ${LEGATO_ROOT}/platformAdaptor/trustZone/swi/components/le_pa_iksCrypto
-#else
+#endif
+#if ${LE_CONFIG_LINUX} = y
         ${LEGATO_ROOT}/platformAdaptor/trustZone/swi/components/le_pa_tz
 #endif
-
         ${LEGATO_QMI_SECSTORE_COMPAT}
     }
 }
