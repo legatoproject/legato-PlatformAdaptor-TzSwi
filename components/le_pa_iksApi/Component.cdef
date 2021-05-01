@@ -7,13 +7,12 @@ sources:
 cflags:
 {
     -I${LEGATO_ROOT}/components/secStore/platformAdaptor/inc
-    // TODO: correct location of the IoT Keystore header files?
-    -I${LEGATO_ROOT}/modules/IoTkeystore/iotKeyStore/core/inc
-    -I${LEGATO_ROOT}/modules/IoTkeystore/iotKeyStore/pa/qtee/inc/
+    -I${LEGATO_ROOT}/proprietary/qct/wp76xx/inc/security/
 }
 
 ldflags:
 {
+    -L${LEGATO_ROOT}/proprietary/qct/wp76xx/lib/
     -liotkeystore
 }
 #else
