@@ -1,0 +1,19 @@
+sources:
+{
+    pa_secStoreIks.c
+}
+
+cflags:
+{
+    -I${LEGATO_ROOT}/components/secStore/platformAdaptor/inc
+    -I${LEGATO_ROOT}/framework/liblegato
+    -I${IKS_PATH}
+}
+
+requires:
+{
+    api:
+    {
+        le_cfg.api
+    }
+}
