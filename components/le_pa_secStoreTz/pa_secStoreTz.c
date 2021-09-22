@@ -170,19 +170,18 @@ static le_mem_PoolRef_t KeyPool = NULL;
 
 //--------------------------------------------------------------------------------------------------
 /**
+ * TrustZone4 enabled path
+ */
+//--------------------------------------------------------------------------------------------------
+#define SIERRA_TZDEV4_ENABLED_PATH       "/sys/module/sierra_tzdev/parameters/tz4_enabled"
+
+//--------------------------------------------------------------------------------------------------
+/**
  * Current version of the SecStore data storage: depends on whether IKS is enabled, and whether
  * the current platform is Linux or RTOS.
  */
 //--------------------------------------------------------------------------------------------------
-#if LE_CONFIG_SECSTORE_IKS_BACKEND
-    #define CURRENT_SECSTORE_VERSION LE_SECSTORE_VERSION_IKS
-#else
-    #ifdef LE_CONFIG_LINUX
-        #define CURRENT_SECSTORE_VERSION LE_SECSTORE_VERSION_TZ
-    #else
-        #define CURRENT_SECSTORE_VERSION LE_SECSTORE_VERSION_SFS
-    #endif
-#endif
+static le_secStore_Version_t CURRENT_SECSTORE_VERSION = LE_SECSTORE_VERSION_TZ;
 
 //--------------------------------------------------------------------------------------------------
 /**
@@ -2421,8 +2420,32 @@ LE_SHARED le_event_HandlerRef_t pa_secStore_SetRestoreHandler
 //--------------------------------------------------------------------------------------------------
 COMPONENT_INIT
 {
-    LE_INFO("Init TrustZone secure storage platform adaptor.");
+#if LE_CONFIG_LINUX
+#if LE_CONFIG_SECSTORE_IKS_BACKEND
+    // Check if TZ4 is supported before setting it as the current secStore version.
+    LE_DEBUG("Checking if TZ4 is supported");
+    int fd;
+    fd = open(SIERRA_TZDEV4_ENABLED_PATH, O_RDONLY | O_NONBLOCK);
 
+    if (fd != -1)
+    {
+        char tzEnabled[2];
+        int size = read(fd, tzEnabled, sizeof(tzEnabled));
+        if (size > 0)
+        {
+            if (strncmp(tzEnabled, "Y", 1) == 0)
+            {
+                LE_DEBUG("TZ4 is supported.");
+                CURRENT_SECSTORE_VERSION = LE_SECSTORE_VERSION_IKS;
+            }
+        }
+        close(fd);
+    }
+#endif
+#else
+    CURRENT_SECSTORE_VERSION = LE_SECSTORE_VERSION_SFS;
+#endif
+    LE_INFO("Init TZ secure storage PA [Version: %d]", CURRENT_SECSTORE_VERSION);
     KeyPool = le_mem_CreatePool("KeyNamePool", sizeof(Key_t));
 
     // Create memory pool to hold encrypted data contents
