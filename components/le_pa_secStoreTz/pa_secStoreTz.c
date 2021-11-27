@@ -2420,8 +2420,8 @@ LE_SHARED le_event_HandlerRef_t pa_secStore_SetRestoreHandler
 //--------------------------------------------------------------------------------------------------
 COMPONENT_INIT
 {
-#if LE_CONFIG_LINUX
 #if LE_CONFIG_SECSTORE_IKS_BACKEND
+#ifdef LE_CONFIG_LINUX
     // Check if TZ4 is supported before setting it as the current secStore version.
     LE_DEBUG("Checking if TZ4 is supported");
     int fd;
@@ -2441,9 +2441,14 @@ COMPONENT_INIT
         }
         close(fd);
     }
+#else
+    // Just use IKS on non-Linux product
+    CURRENT_SECSTORE_VERSION = LE_SECSTORE_VERSION_IKS;
 #endif
 #else
+#ifndef LE_CONFIG_LINUX
     CURRENT_SECSTORE_VERSION = LE_SECSTORE_VERSION_SFS;
+#endif
 #endif
     LE_INFO("Init TZ secure storage PA [Version: %d]", CURRENT_SECSTORE_VERSION);
     KeyPool = le_mem_CreatePool("KeyNamePool", sizeof(Key_t));
