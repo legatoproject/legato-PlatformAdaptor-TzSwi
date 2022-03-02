@@ -1683,13 +1683,8 @@ static le_result_t InitSecStore
         if (result != LE_OK)
         {
             // Just in case: clear the key map
-            le_hashmap_It_Ref_t iter = le_hashmap_GetIterator(KeyMap[CURRENT_SECSTORE_VERSION]);
-            while (le_hashmap_NextNode(iter) == LE_OK)
-            {
-                Key_t* key = le_hashmap_GetValue(iter);
-                le_hashmap_Remove(KeyMap[CURRENT_SECSTORE_VERSION], key->name);
-                le_mem_Release(key);
-            }
+            ResetKeys(CURRENT_SECSTORE_VERSION, true);
+
             LE_INFO("Key file is not valid for current vesion of SecStore (%u)",
                     CURRENT_SECSTORE_VERSION);
             isPorted = false;
