@@ -676,6 +676,7 @@ static le_result_t ImportKey
     le_hashmap_Ref_t map            ///< [IN] The hash map to import the meta data to.
 )
 {
+    le_result_t result = LE_FAULT;
 
     LE_DEBUG("Importing keys: vers %u", version);
     // check if version is valid
@@ -694,7 +695,6 @@ static le_result_t ImportKey
     if (fd < 0)
     {
         LE_ERROR("Error opening keys.");
-        le_atomFile_Cancel(fd);
         return LE_FAULT;
     }
 
@@ -722,6 +722,20 @@ static le_result_t ImportKey
         {
             goto handleReadError;
         }
+
+#if LE_CONFIG_RTOS
+        // IsKeyValid on some platforms corrupts the FD table;
+        // close and reopen key file across that boundary
+        off_t curOff = le_fd_Lseek(fd, 0, SEEK_CUR);
+        if (curOff == (off_t)-1)
+        {
+            goto handleReadError;
+        }
+
+        le_atomFile_Close(fd);
+        fd = -1;
+#endif
+
         if (IsKeyValid(version, key))
         {
             LE_DEBUG("Importing key [%s] size %d vers %u: is valid", (char*)key->name,
@@ -734,23 +748,44 @@ static le_result_t ImportKey
                      key->blobSize, version);
             goto handleReadError;
         }
+
+#if LE_CONFIG_RTOS
+        // Check content of file
+        fd = le_atomFile_Create(KEY_FILE,
+                                LE_FLOCK_READ,
+                                LE_FLOCK_OPEN_IF_EXIST,
+                                S_IRWXU);
+        if (fd < 0)
+        {
+            goto handleReadError;
+        }
+
+        if (le_fd_Lseek(fd, curOff, SEEK_SET) == (off_t)-1)
+        {
+            goto handleReadError;
+        }
+#endif
     }
 
 handleReadError:
     if (dataRead == 0)
     {
         LE_DEBUG("Importing keys successful.");
-        le_atomFile_Close(fd);
+        result = LE_OK;
     }
     else
     {
         LE_DEBUG("Error reading keys.");
         le_mem_Release(key);
-        le_atomFile_Close(fd);
-        return LE_FAULT;
+        result = LE_FAULT;
     }
 
-    return LE_OK;
+    if (fd >= 0)
+    {
+        le_atomFile_Close(fd);
+    }
+
+    return result;
 }
 
 /**-----------------------------------------------------------------------------------------------
