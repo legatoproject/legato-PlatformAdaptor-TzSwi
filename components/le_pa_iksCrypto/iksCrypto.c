@@ -57,6 +57,26 @@ le_result_t iksCrypto_GenerateKey
     else if (IKS_OK != result)
     {
         LE_ERROR("Error creating key: %d", (int) result);
+#if LE_CONFIG_TARGET_GILL
+        // Workaround to reboot once when the first time
+        // migrating keys from SFS to IKS fails.
+        le_cfg_IteratorRef_t iteratorRef = le_cfg_CreateReadTxn("secStore:/");
+        bool workaround_rebooted = le_cfg_GetBool(iteratorRef, "workaround_rebooted", false);
+        le_cfg_CancelTxn(iteratorRef);
+        if (!workaround_rebooted)
+        {
+            le_cfg_IteratorRef_t iteratorRef = le_cfg_CreateWriteTxn("secStore:/");
+            le_cfg_SetBool(iteratorRef, "workaround_rebooted", true);
+            le_cfg_CommitTxn(iteratorRef);
+            LE_ERROR("Fatal error creating key and workaround to reboot");
+            le_ulpm_Reboot();
+            le_thread_Sleep(1);
+        }
+        else
+        {
+            LE_FATAL("Fatal error creating key");
+        }
+#endif
         return LE_FAULT;
     }
 

@@ -14,4 +14,13 @@ ldflags:
     -L${LEGATO_ROOT}/proprietary/qct/wp76xx/lib/
     -liotkeystore
 }
+#elif ${LE_CONFIG_TARGET_GILL} = y
+requires:
+{
+    api:
+    {
+        le_ulpm.api
+        le_cfg.api
+    }
+}
 #endif
