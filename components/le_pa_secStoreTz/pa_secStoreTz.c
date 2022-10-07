@@ -1892,8 +1892,27 @@ le_result_t pa_secStore_Read
                 return result;
             }
 
-            return Write(CURRENT_SECSTORE_VERSION, appName, pathPtr, bufPtr, *bufSizePtr,
-                         false, NULL);
+            result = Write(CURRENT_SECSTORE_VERSION, appName, pathPtr, bufPtr, *bufSizePtr,
+                           false, NULL);
+
+#if MK_CONFIG_AVMS_USE_IOT_KEYSTORE
+            if (CURRENT_SECSTORE_VERSION == LE_SECSTORE_VERSION_IKS)
+            {
+                // If the platform has IoTKeystore supported and enabled, the AVMS credential stored
+                // in the config tree based secure storage will be migrated to IoTKeystore during
+                // initialization of AVC client. Since the credential stored in modem SFS has
+                // already been migrated to config tree, the credential stored in the modem SFS must
+                // be deleted. Eventually, the migrated credential from config tree will also be
+                // deleted during initialization of AVC client.
+                if (result == LE_OK)
+                {
+                    result = sfsSecStore_Delete(pathPtr);
+                    LE_INFO("Deleting credential from path %s on modem SFS, result = %s",
+                            pathPtr, LE_RESULT_TXT(result));
+                }
+            }
+#endif
+            return result;
         }
     }
     else if (type == PATH_TYPE_APP_PATH)
