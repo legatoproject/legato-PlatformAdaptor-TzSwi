@@ -128,6 +128,36 @@ static bool GetKey
     }
 #endif
 
+#if LE_CONFIG_TARGET_GILL
+#define MAX_GETKEY_RETRIES 3
+
+    int retry_counter = 0;
+    iks_result_t iksRc = IKS_OK;
+    do
+    {
+        iksRc = iks_GetKey(keyId, keyRefPtr);
+
+        if (IKS_OK != iksRc)
+        {
+            LE_ERROR("Error getting key: %d", iksRc);
+        }
+        else
+        {
+            break;
+        }
+        retry_counter++;
+        LE_DEBUG("iks_GetKey retries: %d", retry_counter);
+
+    } while (retry_counter < MAX_GETKEY_RETRIES);
+
+    if (retry_counter >= MAX_GETKEY_RETRIES)
+    {
+        LE_ERROR("iks_GetKey max retries: %d", retry_counter);
+        return false;
+    }
+
+#else /* LE_CONFIG_TARGET_GILL */
+
     // Just get the actual key from the keystore.
     iks_result_t iksRc = iks_GetKey(keyId, keyRefPtr);
 
@@ -136,6 +166,8 @@ static bool GetKey
         LE_ERROR("Error getting key: %d", iksRc);
         return false;
     }
+
+#endif /* LE_CONFIG_TARGET_GILL */
 
 #if LE_CONFIG_LINUX
     // Update the cached key
